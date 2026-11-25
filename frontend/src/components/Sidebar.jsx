@@ -15,7 +15,6 @@ const NAV_ITEMS = [
     { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'sites', label: 'Sites', icon: Building2 },
     { id: 'mos', label: 'MOS', sublabel: 'Material on Site', icon: Package },
-    { id: 'progress', label: 'Progress Harian', icon: TrendingUp },
     { id: 'laporan', label: 'Laporan', icon: FileText },
     { id: 'notifikasi', label: 'Notifikasi', icon: Bell },
     { id: 'pengaturan', label: 'Pengaturan', icon: Settings },

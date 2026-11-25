@@ -2,28 +2,26 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import {
-    LayoutDashboard,
     Building2,
     Package,
     TrendingUp,
-    FileText,
     Bell,
-    Settings,
-    LogOut,
     Calendar,
     ChevronRight,
     ChevronDown,
     Sun,
+    Cloud,
+    CloudSun,
+    CloudRain,
+    CloudLightning,
     Wind,
     Droplets,
-    CloudRain,
     ClipboardCheck,
-    ArrowRight,
     Menu,
-    X,
     RefreshCw,
     CheckCircle2,
     UserCheck,
+    X,
 } from 'lucide-react';
 import SitesSection from '../components/SitesSection';
 import MosSection from '../components/MosSection';
@@ -33,6 +31,73 @@ import Sidebar from '../components/Sidebar';
 const API_BASE = 'http://localhost:5000';
 const PROJECT_HERO_IMAGE = '/foto.jpg';
 const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#84cc16', '#8b5cf6', '#06b6d4'];
+const READ_NOTIFICATIONS_KEY = 'simpro_read_notification_ids';
+
+// Default koordinat Kab. Madiun / Desa Wonorejo, Jawa Timur
+const DEFAULT_WEATHER_COORDS = {
+    latitude: -7.5718,
+    longitude: 111.6531,
+    locationName: 'Kab. Madiun',
+};
+
+const extractArray = (payload, keys = ['data']) => {
+    if (Array.isArray(payload)) return payload;
+    for (const key of keys) {
+        if (Array.isArray(payload?.[key])) return payload[key];
+    }
+    return [];
+};
+
+const parseDecimal = (val) => {
+    if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
+    if (typeof val !== 'string') return 0;
+    const normalized = val.trim().replace(',', '.');
+    if (normalized === '') return 0;
+    const parsed = parseFloat(normalized);
+    return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const getMosMasuk = (item) => {
+    const masuk = parseDecimal(item?.jumlah_masuk);
+    const jumlah = parseDecimal(item?.jumlah);
+    if (item?.jumlah_masuk !== undefined && item?.jumlah_masuk !== null && item?.jumlah_masuk !== '') {
+        return masuk > 0 || jumlah === 0 ? masuk : jumlah;
+    }
+    return jumlah;
+};
+
+const getMosTerpakai = (item) => parseDecimal(item?.jumlah_terpakai ?? 0);
+
+const getMosDateKey = (item) =>
+    String(item?.tanggal_masuk || item?.tanggal_update || item?.created_at || '').split('T')[0];
+
+const mapWeatherCode = (code) => {
+    if (code === 0) return { label: 'Cerah', type: 'clear' };
+    if (code === 1 || code === 2) return { label: 'Cerah Berawan', type: 'partly-cloudy' };
+    if (code === 3) return { label: 'Berawan / Mendung', type: 'cloudy' };
+    if (code === 45 || code === 48) return { label: 'Berkabut', type: 'cloudy' };
+    if ([51, 53, 55, 56, 57].includes(code)) return { label: 'Gerimis', type: 'rain' };
+    if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return { label: 'Hujan', type: 'rain' };
+    if ([95, 96, 99].includes(code)) return { label: 'Hujan Petir', type: 'storm' };
+    return { label: 'Berawan', type: 'partly-cloudy' };
+};
+
+const renderWeatherIcon = (type) => {
+    switch (type) {
+        case 'clear':
+            return <Sun className="w-6 h-6 text-amber-400" />;
+        case 'partly-cloudy':
+            return <CloudSun className="w-6 h-6 text-amber-300" />;
+        case 'cloudy':
+            return <Cloud className="w-6 h-6 text-slate-300" />;
+        case 'rain':
+            return <CloudRain className="w-6 h-6 text-sky-400" />;
+        case 'storm':
+            return <CloudLightning className="w-6 h-6 text-indigo-400" />;
+        default:
+            return <Sun className="w-6 h-6 text-amber-400" />;
+    }
+};
 
 const formatShortDate = (dateInput) => {
     if (!dateInput) return '-';
@@ -366,8 +431,9 @@ function LaporanView({ proyekList, mosList, progressList, onNavigate }) {
                     ) : (
                         <div className="divide-y divide-slate-800/60">
                             {mosList.slice(0, 6).map((item) => {
-                                const sisa =
-                                    Number(item.jumlah_masuk || 0) - Number(item.jumlah_terpakai || 0);
+                                const masuk = getMosMasuk(item);
+                                const terpakai = getMosTerpakai(item);
+                                const sisa = Number((masuk - terpakai).toFixed(2));
                                 return (
                                     <div
                                         key={item.id}
@@ -378,8 +444,8 @@ function LaporanView({ proyekList, mosList, progressList, onNavigate }) {
                                                 {item.nama_material}
                                             </div>
                                             <div className="text-[11px] text-slate-400">
-                                                Kode: {item.kode_material} · Masuk: {item.jumlah_masuk}{' '}
-                                                {item.satuan}
+                                                {item.kode_material ? `Kode: ${item.kode_material} · ` : ''}
+                                                Masuk: {masuk} {item.satuan}
                                             </div>
                                         </div>
                                         <span className="font-semibold text-blue-400 tabular-nums shrink-0">
@@ -396,7 +462,7 @@ function LaporanView({ proyekList, mosList, progressList, onNavigate }) {
     );
 }
 
-function NotifikasiView({ activities, onNavigate }) {
+function NotifikasiView({ activities, readIds, onMarkRead, onNavigate }) {
     return (
         <div className="space-y-5 text-left">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -421,43 +487,56 @@ function NotifikasiView({ activities, onNavigate }) {
                         Belum ada notifikasi aktivitas terbaru.
                     </div>
                 ) : (
-                    activities.map((act) => (
-                        <div
-                            key={act.id}
-                            className="p-4 flex items-center justify-between gap-4 hover:bg-slate-800/30 transition"
-                        >
-                            <div className="flex items-center gap-3.5 min-w-0">
-                                <div
-                                    className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${act.iconBg}`}
-                                >
-                                    {act.type === 'mos' ? (
-                                        <Package className="w-4 h-4" />
-                                    ) : (
-                                        <ClipboardCheck className="w-4 h-4" />
-                                    )}
-                                </div>
-                                <div className="min-w-0">
-                                    <div className="text-sm font-medium text-white truncate">
-                                        {act.title}
+                    activities.map((act) => {
+                        const isUnread = !readIds.includes(act.id);
+                        return (
+                            <div
+                                key={act.id}
+                                className="p-4 flex items-center justify-between gap-4 hover:bg-slate-800/30 transition"
+                            >
+                                <div className="flex items-center gap-3.5 min-w-0">
+                                    <div
+                                        className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${act.iconBg}`}
+                                    >
+                                        {act.type === 'mos' ? (
+                                            <Package className="w-4 h-4" />
+                                        ) : (
+                                            <ClipboardCheck className="w-4 h-4" />
+                                        )}
                                     </div>
-                                    <div className="text-xs text-slate-400">{act.time}</div>
+                                    <div className="min-w-0">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-sm font-medium text-white truncate">
+                                                {act.title}
+                                            </span>
+                                            {isUnread && (
+                                                <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 text-[10px] font-semibold shrink-0">
+                                                    Baru
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="text-xs text-slate-400">{act.time}</div>
+                                    </div>
+                                </div>
+
+                                <div className="flex items-center gap-3 shrink-0">
+                                    <span className={`text-xs font-semibold tabular-nums ${act.badgeClass}`}>
+                                        {act.badge}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            onMarkRead(act.id);
+                                            onNavigate(act.targetMenu || 'overview');
+                                        }}
+                                        className="px-3 py-1.5 rounded-lg bg-[#131c2e] hover:bg-blue-600 text-slate-200 hover:text-white text-xs font-medium transition cursor-pointer"
+                                    >
+                                        Lihat
+                                    </button>
                                 </div>
                             </div>
-
-                            <div className="flex items-center gap-3 shrink-0">
-                                <span className={`text-xs font-semibold tabular-nums ${act.badgeClass}`}>
-                                    {act.badge}
-                                </span>
-                                <button
-                                    type="button"
-                                    onClick={() => onNavigate(act.targetMenu || 'overview')}
-                                    className="px-3 py-1.5 rounded-lg bg-[#131c2e] hover:bg-blue-600 text-slate-200 hover:text-white text-xs font-medium transition cursor-pointer"
-                                >
-                                    Lihat
-                                </button>
-                            </div>
-                        </div>
-                    ))
+                        );
+                    })
                 )}
             </div>
         </div>
@@ -618,6 +697,100 @@ export default function Dashboard() {
     const [selectedProyekId, setSelectedProyekId] = useState(null);
     const [mobileNavOpen, setMobileNavOpen] = useState(false);
     const [loadingData, setLoadingData] = useState(false);
+    const [readNotificationIds, setReadNotificationIds] = useState(() => {
+        try {
+            const raw = localStorage.getItem(READ_NOTIFICATIONS_KEY);
+            const parsed = raw ? JSON.parse(raw) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch {
+            return [];
+        }
+    });
+    const [weather, setWeather] = useState({
+        loading: true,
+        temp: '--',
+        condition: 'Memuat cuaca...',
+        type: 'partly-cloudy',
+        humidity: '--',
+        windSpeed: '--',
+        rainChance: '--',
+        locationName: DEFAULT_WEATHER_COORDS.locationName,
+    });
+
+    const fetchRealWeather = useCallback(async (lat, lon, locName) => {
+        try {
+            const url =
+                `https://api.open-meteo.com/v1/forecast` +
+                `?latitude=${lat}&longitude=${lon}` +
+                `&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m` +
+                `&hourly=precipitation_probability` +
+                `&forecast_days=1&timezone=auto`;
+
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('Gagal mengambil data cuaca');
+            const data = await res.json();
+
+            const current = data?.current || {};
+            const mapped = mapWeatherCode(current.weather_code);
+            const currentHourPrefix = String(current.time || '').slice(0, 13);
+            const hourlyTimes = data?.hourly?.time || [];
+            const hourlyProbs = data?.hourly?.precipitation_probability || [];
+            const hourIdx = hourlyTimes.findIndex((t) => String(t).startsWith(currentHourPrefix));
+            const rainProb =
+                hourIdx !== -1 && hourlyProbs[hourIdx] != null
+                    ? hourlyProbs[hourIdx]
+                    : hourlyProbs[0] ?? 0;
+
+            setWeather({
+                loading: false,
+                temp: current.temperature_2m != null ? Math.round(current.temperature_2m) : '--',
+                condition: mapped.label,
+                type: mapped.type,
+                humidity: current.relative_humidity_2m != null ? Math.round(current.relative_humidity_2m) : '--',
+                windSpeed: current.wind_speed_10m != null ? Math.round(current.wind_speed_10m) : '--',
+                rainChance: Math.round(rainProb),
+                locationName: locName,
+            });
+        } catch {
+            setWeather((prev) => ({
+                ...prev,
+                loading: false,
+                condition: prev.temp === '--' ? 'Cuaca tidak tersedia' : prev.condition,
+            }));
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchRealWeather(
+            DEFAULT_WEATHER_COORDS.latitude,
+            DEFAULT_WEATHER_COORDS.longitude,
+            DEFAULT_WEATHER_COORDS.locationName
+        );
+
+        if (typeof navigator !== 'undefined' && 'geolocation' in navigator) {
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    fetchRealWeather(
+                        pos.coords.latitude,
+                        pos.coords.longitude,
+                        'Lokasi Saat Ini'
+                    );
+                },
+                () => {},
+                { timeout: 6000 }
+            );
+        }
+
+        const timer = setInterval(() => {
+            fetchRealWeather(
+                DEFAULT_WEATHER_COORDS.latitude,
+                DEFAULT_WEATHER_COORDS.longitude,
+                DEFAULT_WEATHER_COORDS.locationName
+            );
+        }, 15 * 60 * 1000);
+
+        return () => clearInterval(timer);
+    }, [fetchRealWeather]);
 
     const loadDashboardData = useCallback(async (token) => {
         setLoadingData(true);
@@ -629,21 +802,21 @@ export default function Dashboard() {
             axios.get(`${API_BASE}/api/fitur/progress`, { headers }),
         ]);
 
-        if (resProyek.status === 'fulfilled' && Array.isArray(resProyek.value.data)) {
-            setProyekList(resProyek.value.data);
-        } else if (resProyek.status === 'rejected') {
+        if (resProyek.status === 'fulfilled') {
+            setProyekList(extractArray(resProyek.value.data, ['data', 'proyek']));
+        } else {
             console.error('Gagal memuat /api/proyek:', resProyek.reason);
         }
 
-        if (resMos.status === 'fulfilled' && Array.isArray(resMos.value.data)) {
-            setMosList(resMos.value.data);
-        } else if (resMos.status === 'rejected') {
+        if (resMos.status === 'fulfilled') {
+            setMosList(extractArray(resMos.value.data, ['data', 'mos']));
+        } else {
             console.error('Gagal memuat /api/fitur/mos:', resMos.reason);
         }
 
-        if (resProgress.status === 'fulfilled' && Array.isArray(resProgress.value.data)) {
-            setProgressList(resProgress.value.data);
-        } else if (resProgress.status === 'rejected') {
+        if (resProgress.status === 'fulfilled') {
+            setProgressList(extractArray(resProgress.value.data, ['data', 'progress']));
+        } else {
             console.error('Gagal memuat /api/fitur/progress:', resProgress.reason);
         }
 
@@ -664,10 +837,28 @@ export default function Dashboard() {
     const handleRefresh = useCallback(() => {
         const token = localStorage.getItem('token');
         if (token) loadDashboardData(token);
-    }, [loadDashboardData]);
+        fetchRealWeather(
+            DEFAULT_WEATHER_COORDS.latitude,
+            DEFAULT_WEATHER_COORDS.longitude,
+            DEFAULT_WEATHER_COORDS.locationName
+        );
+    }, [loadDashboardData, fetchRealWeather]);
+
+    const markNotificationsAsRead = useCallback((idsToMark) => {
+        if (!Array.isArray(idsToMark) || idsToMark.length === 0) return;
+        setReadNotificationIds((prev) => {
+            const merged = Array.from(new Set([...prev, ...idsToMark]));
+            try {
+                localStorage.setItem(READ_NOTIFICATIONS_KEY, JSON.stringify(merged));
+            } catch {
+                // abaikan jika storage penuh
+            }
+            return merged;
+        });
+    }, []);
 
     const handleNavigate = useCallback((menuId) => {
-        if (menuId === 'progress') {
+        if (menuId === 'progress' || menuId === 'mos') {
             setSelectedProyekId(null);
         }
         setActiveMenu(menuId);
@@ -692,7 +883,7 @@ export default function Dashboard() {
         const map = new Map();
         progressList.forEach((item) => {
             const key = String(item.proyek_id ?? '');
-            const val = Number(item.bobot_realisasi ?? 0);
+            const val = parseDecimal(item.bobot_realisasi ?? 0);
             const tgl = item.tanggal_laporan ? new Date(item.tanggal_laporan).getTime() : 0;
             const prev = map.get(key);
             if (!prev || tgl >= prev.tgl) {
@@ -728,16 +919,20 @@ export default function Dashboard() {
         const set = new Set();
         progressList.forEach((item) => {
             if (item.tanggal_laporan) {
-                set.add(item.tanggal_laporan.split('T')[0]);
+                set.add(String(item.tanggal_laporan).split('T')[0]);
             }
         });
+        mosList.forEach((item) => {
+            const d = getMosDateKey(item);
+            if (d) set.add(d);
+        });
         return Array.from(set).sort((a, b) => b.localeCompare(a));
-    }, [progressList]);
+    }, [progressList, mosList]);
 
     const filteredMosList = useMemo(() => {
         if (!selectedDate) return mosList;
         const matchByDate = mosList.filter(
-            (item) => (item.tanggal_update || '').split('T')[0] === selectedDate
+            (item) => getMosDateKey(item) === selectedDate
         );
         return matchByDate.length > 0 ? matchByDate : mosList;
     }, [mosList, selectedDate]);
@@ -747,7 +942,7 @@ export default function Dashboard() {
         filteredMosList.forEach((item) => {
             const name = item.nama_material || 'Material';
             const sisa = Math.max(
-                Number(item.jumlah_masuk || 0) - Number(item.jumlah_terpakai || 0),
+                getMosMasuk(item) - getMosTerpakai(item),
                 0
             );
             const current = grouped.get(name) || {
@@ -774,7 +969,7 @@ export default function Dashboard() {
             (acc, item) =>
                 acc +
                 Math.max(
-                    Number(item.jumlah_masuk || 0) - Number(item.jumlah_terpakai || 0),
+                    getMosMasuk(item) - getMosTerpakai(item),
                     0
                 ),
             0
@@ -788,7 +983,7 @@ export default function Dashboard() {
         }
         if (progressList.length > 0) {
             const total = progressList.reduce(
-                (acc, p) => acc + Number(p.bobot_realisasi || 0),
+                (acc, p) => acc + parseDecimal(p.bobot_realisasi ?? 0),
                 0
             );
             return Math.round(total / progressList.length);
@@ -799,10 +994,10 @@ export default function Dashboard() {
     const aktivitasHariIniCount = useMemo(() => {
         const targetDate = selectedDate || new Date().toISOString().split('T')[0];
         const progCount = progressList.filter(
-            (p) => (p.tanggal_laporan || '').split('T')[0] === targetDate
+            (p) => String(p.tanggal_laporan || '').split('T')[0] === targetDate
         ).length;
         const mosCount = mosList.filter(
-            (m) => (m.tanggal_update || '').split('T')[0] === targetDate
+            (m) => getMosDateKey(m) === targetDate
         ).length;
         return progCount + mosCount;
     }, [progressList, mosList, selectedDate]);
@@ -811,7 +1006,7 @@ export default function Dashboard() {
         const dateSet = new Set();
         progressList.forEach((p) => {
             if (p.tanggal_laporan) {
-                dateSet.add(p.tanggal_laporan.split('T')[0]);
+                dateSet.add(String(p.tanggal_laporan).split('T')[0]);
             }
         });
         const sortedDates = Array.from(dateSet).sort((a, b) => a.localeCompare(b)).slice(-7);
@@ -824,11 +1019,11 @@ export default function Dashboard() {
         progressList.forEach((p) => {
             const key = String(p.proyek_id ?? p.uraian_pekerjaan ?? 'Proyek');
             const label = proyekNameMap.get(key) || p.nama_proyek || `Proyek ${key}`;
-            const dateKey = (p.tanggal_laporan || '').split('T')[0];
+            const dateKey = String(p.tanggal_laporan || '').split('T')[0];
             if (!seriesMap.has(key)) {
                 seriesMap.set(key, { label, byDate: new Map() });
             }
-            seriesMap.get(key).byDate.set(dateKey, Number(p.bobot_realisasi || 0));
+            seriesMap.get(key).byDate.set(dateKey, parseDecimal(p.bobot_realisasi ?? 0));
         });
 
         const series = Array.from(seriesMap.values())
@@ -853,43 +1048,54 @@ export default function Dashboard() {
 
     const recentActivities = useMemo(() => {
         const progActs = progressList.map((p) => ({
-            id: `prog-${p.id}`,
+            id: `prog-${p.id}-${p.tanggal_laporan || ''}-${p.bobot_realisasi ?? 0}`,
             title: p.uraian_pekerjaan || `Update progress Proyek #${p.proyek_id}`,
             time: formatDateTime(p.tanggal_laporan),
             sortTime: p.tanggal_laporan ? new Date(p.tanggal_laporan).getTime() : 0,
-            badge: `${Number(p.bobot_realisasi || 0)}%`,
+            badge: `${parseDecimal(p.bobot_realisasi ?? 0)}%`,
             badgeClass: 'text-emerald-400 font-semibold',
             iconBg: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
             type: 'progress',
             targetMenu: 'progress',
         }));
 
-        const mosActs = mosList.map((m) => ({
-            id: `mos-${m.id}`,
-            title: `Update material ${m.nama_material || m.kode_material}`,
-            time: formatDateTime(m.tanggal_update),
-            sortTime: m.tanggal_update ? new Date(m.tanggal_update).getTime() : 0,
-            badge: `+${Number(m.jumlah_masuk || 0)} ${m.satuan || ''}`.trim(),
-            badgeClass: 'text-sky-400 font-semibold',
-            iconBg: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
-            type: 'mos',
-            targetMenu: 'mos',
-        }));
+        const mosActs = mosList.map((m) => {
+            const masuk = getMosMasuk(m);
+            const dateVal = getMosDateKey(m);
+            return {
+                id: `mos-${m.id}-${dateVal}-${masuk}-${m.jumlah_terpakai ?? 0}`,
+                title: `Update material ${m.nama_material || m.kode_material || 'MOS'}`,
+                time: formatDateTime(dateVal),
+                sortTime: dateVal ? new Date(dateVal).getTime() : 0,
+                badge: `+${masuk} ${m.satuan || ''}`.trim(),
+                badgeClass: 'text-sky-400 font-semibold',
+                iconBg: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+                type: 'mos',
+                targetMenu: 'mos',
+            };
+        });
 
         return [...progActs, ...mosActs]
             .sort((a, b) => b.sortTime - a.sortTime)
             .slice(0, 5);
     }, [progressList, mosList]);
 
-    const navItems = [
-        { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
-        { id: 'sites', label: 'Sites', icon: Building2 },
-        { id: 'mos', label: 'MOS', sublabel: 'Material on Site', icon: Package },
-        { id: 'progress', label: 'Progress Harian', icon: TrendingUp },
-        { id: 'laporan', label: 'Laporan', icon: FileText },
-        { id: 'notifikasi', label: 'Notifikasi', icon: Bell },
-        { id: 'pengaturan', label: 'Pengaturan', icon: Settings },
-    ];
+    const unreadNotificationCount = useMemo(() => {
+        return recentActivities.filter((act) => !readNotificationIds.includes(act.id)).length;
+    }, [recentActivities, readNotificationIds]);
+
+    useEffect(() => {
+        if (activeMenu === 'notifikasi' && recentActivities.length > 0) {
+            markNotificationsAsRead(recentActivities.map((a) => a.id));
+        }
+    }, [activeMenu, recentActivities, markNotificationsAsRead]);
+
+    const handleBellClick = useCallback(() => {
+        if (recentActivities.length > 0) {
+            markNotificationsAsRead(recentActivities.map((a) => a.id));
+        }
+        handleNavigate('notifikasi');
+    }, [recentActivities, markNotificationsAsRead, handleNavigate]);
 
     const getHeaderInfo = () => {
         switch (activeMenu) {
@@ -976,11 +1182,26 @@ export default function Dashboard() {
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-3 ml-auto">
+                    <div className="flex flex-wrap items-center gap-2.5 ml-auto">
                         {activeMenu === 'overview' && (
                             <>
+                                {/* Filter Kalender */}
+                                <label
+                                    className="relative flex items-center gap-2 bg-[#11192b] border border-slate-800 hover:border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-200 cursor-pointer"
+                                    title="Pilih tanggal lewat kalender"
+                                >
+                                    <Calendar className="w-4 h-4 text-blue-400 shrink-0" />
+                                    <input
+                                        type="date"
+                                        value={selectedDate}
+                                        onChange={(e) => setSelectedDate(e.target.value)}
+                                        className="bg-transparent text-slate-100 font-medium outline-none cursor-pointer [color-scheme:dark]"
+                                        aria-label="Filter kalender tanggal"
+                                    />
+                                </label>
+
+                                {/* Dropdown Tanggal Tersedia */}
                                 <label className="relative flex items-center gap-2 bg-[#11192b] border border-slate-800 hover:border-slate-700 rounded-xl px-3.5 py-2 text-xs sm:text-sm text-slate-200 cursor-pointer">
-                                    <Calendar className="w-4 h-4 text-slate-400" />
                                     <select
                                         value={selectedDate}
                                         onChange={(e) => setSelectedDate(e.target.value)}
@@ -998,6 +1219,18 @@ export default function Dashboard() {
                                     <ChevronDown className="w-4 h-4 text-slate-400 pointer-events-none" />
                                 </label>
 
+                                {selectedDate && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setSelectedDate('')}
+                                        className="h-10 px-2.5 rounded-xl bg-[#11192b] border border-slate-800 hover:border-rose-500/50 hover:text-rose-300 flex items-center gap-1 text-xs text-slate-400 transition cursor-pointer"
+                                        title="Reset filter tanggal"
+                                        aria-label="Reset filter tanggal"
+                                    >
+                                        <X className="w-3.5 h-3.5" />
+                                    </button>
+                                )}
+
                                 <button
                                     type="button"
                                     onClick={handleRefresh}
@@ -1013,14 +1246,14 @@ export default function Dashboard() {
 
                         <button
                             type="button"
-                            onClick={() => handleNavigate('notifikasi')}
+                            onClick={handleBellClick}
                             className="relative w-10 h-10 rounded-xl bg-[#11192b] border border-slate-800 hover:border-slate-700 flex items-center justify-center text-slate-300 hover:text-white transition cursor-pointer"
                             aria-label="Notifikasi"
                         >
                             <Bell className="w-4 h-4" />
-                            {recentActivities.length > 0 && (
-                                <span className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-blue-600 text-white text-[10px] font-bold flex items-center justify-center">
-                                    {recentActivities.length}
+                            {unreadNotificationCount > 0 && (
+                                <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-blue-600 text-white text-[10px] font-bold flex items-center justify-center tabular-nums">
+                                    {unreadNotificationCount}
                                 </span>
                             )}
                         </button>
@@ -1093,7 +1326,7 @@ export default function Dashboard() {
 
                                 <button
                                     type="button"
-                                    onClick={() => handleNavigate('notifikasi')}
+                                    onClick={handleBellClick}
                                     className="bg-[#0e1626] hover:bg-[#121c30] border border-slate-800/80 rounded-2xl p-5 flex items-center justify-between text-left transition cursor-pointer"
                                 >
                                     <div>
@@ -1115,86 +1348,85 @@ export default function Dashboard() {
 
                             {/* Main Grid */}
                             <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
-                                <div className="xl:col-span-8 space-y-5">
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                                        {/* Sites Card */}
-                                        <section className="bg-[#0e1626] border border-slate-800/80 rounded-2xl p-5">
-                                            <div className="flex items-center justify-between mb-4">
-                                                <h2 className="text-base font-semibold text-white">Sites</h2>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleNavigate('sites')}
-                                                    className="text-xs font-medium text-blue-400 hover:text-blue-300 transition cursor-pointer"
-                                                >
-                                                    Lihat semua
-                                                </button>
-                                            </div>
-
-                                            {sitesDisplay.length === 0 ? (
-                                                <div className="py-10 text-center text-xs text-slate-500">
-                                                    Belum ada data proyek di database.
-                                                </div>
-                                            ) : (
-                                                <div className="space-y-3">
-                                                    {sitesDisplay.slice(0, 4).map((site) => (
-                                                        <button
-                                                            key={site.id}
-                                                            type="button"
-                                                            onClick={() => handleNavigate('sites')}
-                                                            className="w-full flex items-center justify-between gap-3 p-2 rounded-xl hover:bg-slate-800/50 transition text-left cursor-pointer"
-                                                        >
-                                                            <div className="flex items-center gap-3 min-w-0">
-                                                                <img
-                                                                    src={site.gambar}
-                                                                    alt={site.nama}
-                                                                    className="w-12 h-10 rounded-lg object-cover bg-slate-800 shrink-0"
-                                                                />
-                                                                <div className="min-w-0">
-                                                                    <div className="text-sm font-semibold text-white truncate">
-                                                                        {site.nama}
-                                                                    </div>
-                                                                    <div className="text-xs text-slate-400 truncate">
-                                                                        {site.lokasi}
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-
-                                                            <div className="flex items-center gap-2.5 shrink-0">
-                                                                <div className="w-16 sm:w-20 h-1.5 rounded-full bg-slate-800 overflow-hidden">
-                                                                    <div
-                                                                        className="h-full rounded-full bg-blue-500"
-                                                                        style={{ width: `${site.progress}%` }}
-                                                                    />
-                                                                </div>
-                                                                <span className="text-xs text-slate-400 tabular-nums w-8 text-right">
-                                                                    {site.presentase_progress}%
-                                                                </span>
-                                                                <ChevronRight className="w-4 h-4 text-slate-500" />
-                                                            </div>
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </section>
-
-                                        {/* MOS Donut Card */}
-                                        <section className="bg-[#0e1626] border border-slate-800/80 rounded-2xl p-5 flex flex-col justify-between">
-                                            <div className="flex items-center justify-between gap-2 mb-4">
-                                                <h2 className="text-sm sm:text-base font-semibold text-white leading-snug">
-                                                    MOS (Material on Site)
-                                                </h2>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleNavigate('mos')}
-                                                    className="text-xs font-medium text-blue-400 hover:text-blue-300 transition cursor-pointer shrink-0 whitespace-nowrap"
-                                                >
-                                                    Lihat semua
-                                                </button>
-                                            </div>
-
-                                            <MosDonutChart items={mosBreakdown} total={totalMos} />
-                                        </section>
+                                {/* Baris Atas: MOS Full-Width (sejajar hingga ujung kanan) */}
+                                <section className="xl:col-span-12 bg-[#0e1626] border border-slate-800/80 rounded-2xl p-5">
+                                    <div className="flex items-center justify-between gap-2 mb-4">
+                                        <h2 className="text-sm sm:text-base font-semibold text-white leading-snug">
+                                            MOS (Material on Site)
+                                        </h2>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleNavigate('mos')}
+                                            className="text-xs font-medium text-blue-400 hover:text-blue-300 transition cursor-pointer shrink-0 whitespace-nowrap"
+                                        >
+                                            Lihat semua
+                                        </button>
                                     </div>
+
+                                    <MosDonutChart items={mosBreakdown} total={totalMos} />
+                                </section>
+
+                                {/* Baris Bawah Kiri: Sites & Progress Harian */}
+                                <div className="xl:col-span-7 space-y-5">
+                                    {/* Sites Card */}
+                                    <section className="bg-[#0e1626] border border-slate-800/80 rounded-2xl p-5">
+                                        <div className="flex items-center justify-between mb-4">
+                                            <h2 className="text-base font-semibold text-white">Sites</h2>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleNavigate('sites')}
+                                                className="text-xs font-medium text-blue-400 hover:text-blue-300 transition cursor-pointer"
+                                            >
+                                                Lihat semua
+                                            </button>
+                                        </div>
+
+                                        {sitesDisplay.length === 0 ? (
+                                            <div className="py-10 text-center text-xs text-slate-500">
+                                                Belum ada data proyek di database.
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-3">
+                                                {sitesDisplay.slice(0, 4).map((site) => (
+                                                    <button
+                                                        key={site.id}
+                                                        type="button"
+                                                        onClick={() => handleOpenProgressFromSite(site)}
+                                                        className="w-full flex items-center justify-between gap-3 p-2 rounded-xl hover:bg-slate-800/50 transition text-left cursor-pointer"
+                                                    >
+                                                        <div className="flex items-center gap-3 min-w-0">
+                                                            <img
+                                                                src={site.gambar}
+                                                                alt={site.nama}
+                                                                className="w-12 h-10 rounded-lg object-cover bg-slate-800 shrink-0"
+                                                            />
+                                                            <div className="min-w-0">
+                                                                <div className="text-sm font-semibold text-white truncate">
+                                                                    {site.nama}
+                                                                </div>
+                                                                <div className="text-xs text-slate-400 truncate">
+                                                                    {site.lokasi}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="flex items-center gap-2.5 shrink-0">
+                                                            <div className="w-16 sm:w-20 h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                                                                <div
+                                                                    className="h-full rounded-full bg-blue-500"
+                                                                    style={{ width: `${site.progress}%` }}
+                                                                />
+                                                            </div>
+                                                            <span className="text-xs text-slate-400 tabular-nums w-9 text-right">
+                                                                {site.progress}%
+                                                            </span>
+                                                            <ChevronRight className="w-4 h-4 text-slate-500" />
+                                                        </div>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </section>
 
                                     {/* Progress Harian Line Chart */}
                                     <section className="bg-[#0e1626] border border-slate-800/80 rounded-2xl p-5">
@@ -1218,46 +1450,18 @@ export default function Dashboard() {
                                     </section>
                                 </div>
 
-                                {/* Right 4 Columns */}
-                                <div className="xl:col-span-4 space-y-5">
-                                    {/* Featured Site Hero */}
-                                    <div className="relative h-56 rounded-2xl overflow-hidden border border-slate-800/80 bg-[#11192b]">
-                                        <img
-                                            src={featuredSite?.gambar || PROJECT_HERO_IMAGE}
-                                            alt={featuredSite?.nama || 'Proyek Konstruksi'}
-                                            className="w-full h-full object-cover"
-                                        />
-                                        <div className="absolute inset-0 bg-gradient-to-t from-[#070c16] via-[#070c16]/35 to-transparent" />
-                                        <div className="absolute inset-x-4 bottom-4 flex items-end justify-between gap-3">
-                                            <div className="text-left">
-                                                <h3 className="text-base font-bold text-white">
-                                                    {featuredSite ? featuredSite.nama : 'Belum ada proyek aktif'}
-                                                </h3>
-                                                <p className="text-xs text-slate-300">
-                                                    {featuredSite ? featuredSite.lokasi : 'Tambahkan data proyek di Sites'}
-                                                </p>
-                                            </div>
-                                            <button
-                                                type="button"
-                                                onClick={() => handleNavigate('sites')}
-                                                className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-1.5 transition shrink-0 cursor-pointer"
-                                            >
-                                                <span>Lihat Detail</span>
-                                                <ArrowRight className="w-3.5 h-3.5" />
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    {/* Weather Widget */}
+                                {/* Baris Bawah Kanan: Weather & Aktivitas Terbaru */}
+                                <div className="xl:col-span-5 space-y-5">
+                                    {/* Real Weather Widget */}
                                     <section className="bg-[#0e1626] border border-slate-800/80 rounded-2xl p-5">
                                         <div className="flex items-center justify-between mb-3">
-                                            <span className="text-sm font-semibold text-white">
-                                                {featuredSite?.lokasi || 'Madiun, Jawa Timur'}
+                                            <span className="text-sm font-semibold text-white truncate">
+                                                {weather.locationName || featuredSite?.lokasi || 'Kab. Madiun'}
                                             </span>
                                             <button
                                                 type="button"
                                                 onClick={() => handleNavigate('progress')}
-                                                className="text-xs font-medium text-blue-400 hover:text-blue-300 transition cursor-pointer"
+                                                className="text-xs font-medium text-blue-400 hover:text-blue-300 transition cursor-pointer shrink-0"
                                             >
                                                 Lihat detail
                                             </button>
@@ -1266,14 +1470,14 @@ export default function Dashboard() {
                                         <div className="flex items-center justify-between gap-4">
                                             <div className="flex items-center gap-3">
                                                 <div className="w-11 h-11 rounded-2xl bg-amber-500/15 flex items-center justify-center text-amber-400">
-                                                    <Sun className="w-6 h-6" />
+                                                    {renderWeatherIcon(weather.type)}
                                                 </div>
                                                 <div className="text-left">
-                                                    <div className="text-2xl font-bold text-white leading-none">
-                                                        29°C
+                                                    <div className="text-2xl font-bold text-white leading-none tabular-nums">
+                                                        {weather.loading ? '...' : `${weather.temp}°C`}
                                                     </div>
                                                     <div className="text-xs text-slate-400 mt-1">
-                                                        Cerah Berawan
+                                                        {weather.condition}
                                                     </div>
                                                 </div>
                                             </div>
@@ -1284,21 +1488,27 @@ export default function Dashboard() {
                                                         <Droplets className="w-3.5 h-3.5 text-sky-400" />
                                                         Kelembapan
                                                     </span>
-                                                    <span className="text-slate-200 font-medium">65%</span>
+                                                    <span className="text-slate-200 font-medium tabular-nums">
+                                                        {weather.humidity}%
+                                                    </span>
                                                 </div>
                                                 <div className="flex items-center justify-between gap-4">
                                                     <span className="flex items-center gap-1.5">
                                                         <Wind className="w-3.5 h-3.5 text-slate-400" />
                                                         Angin
                                                     </span>
-                                                    <span className="text-slate-200 font-medium">12 km/h</span>
+                                                    <span className="text-slate-200 font-medium tabular-nums">
+                                                        {weather.windSpeed} km/h
+                                                    </span>
                                                 </div>
                                                 <div className="flex items-center justify-between gap-4">
                                                     <span className="flex items-center gap-1.5">
                                                         <CloudRain className="w-3.5 h-3.5 text-indigo-400" />
                                                         Hujan
                                                     </span>
-                                                    <span className="text-slate-200 font-medium">0%</span>
+                                                    <span className="text-slate-200 font-medium tabular-nums">
+                                                        {weather.rainChance}%
+                                                    </span>
                                                 </div>
                                             </div>
                                         </div>
@@ -1312,7 +1522,7 @@ export default function Dashboard() {
                                             </h2>
                                             <button
                                                 type="button"
-                                                onClick={() => handleNavigate('notifikasi')}
+                                                onClick={handleBellClick}
                                                 className="text-xs font-medium text-blue-400 hover:text-blue-300 transition cursor-pointer"
                                             >
                                                 Lihat semua
@@ -1329,7 +1539,10 @@ export default function Dashboard() {
                                                     <button
                                                         key={act.id}
                                                         type="button"
-                                                        onClick={() => handleNavigate(act.targetMenu || 'notifikasi')}
+                                                        onClick={() => {
+                                                            markNotificationsAsRead([act.id]);
+                                                            handleNavigate(act.targetMenu || 'notifikasi');
+                                                        }}
                                                         className="w-full flex items-center justify-between gap-3 p-1.5 -mx-1.5 rounded-xl hover:bg-slate-800/40 transition text-left cursor-pointer"
                                                     >
                                                         <div className="flex items-center gap-3 min-w-0">
@@ -1375,7 +1588,13 @@ export default function Dashboard() {
                         />
                     )}
 
-                    {activeMenu === 'mos' && <MosSection user={user} />}
+                    {activeMenu === 'mos' && (
+                        <MosSection
+                            user={user}
+                            selectedProyekId={selectedProyekId}
+                            onSelectProyekId={setSelectedProyekId}
+                        />
+                    )}
 
                     {activeMenu === 'progress' && (
                         <ProgressSection
@@ -1397,6 +1616,8 @@ export default function Dashboard() {
                     {activeMenu === 'notifikasi' && (
                         <NotifikasiView
                             activities={recentActivities}
+                            readIds={readNotificationIds}
+                            onMarkRead={(id) => markNotificationsAsRead([id])}
                             onNavigate={handleNavigate}
                         />
                     )}
@@ -1426,6 +1647,6 @@ export default function Dashboard() {
                     </div>
                 </footer>
             </div>
-        </div >
+        </div>
     );
 }
