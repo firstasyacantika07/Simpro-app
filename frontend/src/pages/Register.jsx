@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff } from 'lucide-react';
-import axios from 'axios';
+import apiClient, { setAuthSession } from '../api/axiosClient';
 import backgroundImage from '../assets/Background.jpg';
 
 const PROJECT_BG_IMAGE = backgroundImage;
@@ -42,11 +42,26 @@ export default function Register() {
                 posisi: rest.posisi.trim(),
             };
 
-            await axios.post('http://localhost:5000/api/auth/register', payload);
+            const res = await apiClient.post('/api/auth/register', payload);
+            const accessToken = res.data?.accessToken || res.data?.token;
+            const user = res.data?.user;
+
+            if (accessToken && user) {
+                setAuthSession({ accessToken, user });
+                navigate('/dashboard', { replace: true });
+                return;
+            }
+
             alert('Registrasi berhasil! Silakan login.');
             navigate('/login');
         } catch (err) {
-            setError(err.response?.data?.message || 'Registrasi gagal.');
+            if (err.response?.status === 404) {
+                setError(
+                    'Endpoint registrasi (/api/auth/register) belum tersedia di server backend. Pastikan route register sudah ditambahkan dan container di-restart.'
+                );
+            } else {
+                setError(err.response?.data?.message || 'Registrasi gagal.');
+            }
         } finally {
             setLoading(false);
         }

@@ -850,13 +850,21 @@ export default function Dashboard() {
 
             try {
                 const refreshed = await refreshAccessToken();
-                if (active && refreshed?.user) {
-                    setUser(refreshed.user);
+                const resolvedUser = refreshed?.user || storedUser;
+                if (active && resolvedUser) {
+                    setUser(resolvedUser);
                     loadDashboardData();
+                } else if (active) {
+                    clearSessionAndRedirect();
                 }
             } catch {
                 if (active) {
-                    clearSessionAndRedirect();
+                    if (storedUser) {
+                        setUser(storedUser);
+                        loadDashboardData();
+                    } else {
+                        clearSessionAndRedirect();
+                    }
                 }
             }
         }

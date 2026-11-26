@@ -25,11 +25,15 @@ function hashToken(rawToken) {
 function getRefreshCookieOptions(req) {
     const isHttps =
         Boolean(req?.secure) ||
-        req?.headers?.['x-forwarded-proto'] === 'https' ||
-        process.env.NODE_ENV === 'production';
+        req?.headers?.['x-forwarded-proto'] === 'https';
 
     const secureEnv = String(process.env.COOKIE_SECURE || '').trim().toLowerCase();
-    let secure = secureEnv === 'true' ? true : secureEnv === 'false' ? false : isHttps;
+    let secure =
+        secureEnv === 'true'
+            ? true
+            : secureEnv === 'false'
+                ? false
+                : isHttps;
 
     const defaultSameSite = secure ? 'none' : 'lax';
     const sameSiteRaw = String(process.env.COOKIE_SAMESITE || defaultSameSite)
@@ -39,16 +43,14 @@ function getRefreshCookieOptions(req) {
         ? sameSiteRaw
         : defaultSameSite;
 
-    // Browser modern mewajibkan Secure=true apabila SameSite=none
-    if (sameSite === 'none') {
-        secure = true;
-    }
+    // Jika HTTP biasa (bukan HTTPS) dan sameSite diset 'none', turunkan ke 'lax' agar tidak ditolak browser
+    const effectiveSameSite = sameSite === 'none' && !secure ? 'lax' : sameSite;
 
     return {
         httpOnly: true,
         secure,
-        sameSite,
-        path: '/api/auth',
+        sameSite: effectiveSameSite,
+        path: '/',
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 hari dalam milidetik
     };
 }

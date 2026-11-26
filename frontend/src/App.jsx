@@ -41,15 +41,20 @@ function ProtectedRoute({ children }) {
         const refreshed = await refreshAccessToken();
         if (!active) return;
 
-        if (refreshed?.accessToken && (refreshed?.user || getStoredUser())) {
+        if (refreshed?.accessToken || refreshed?.user || getStoredUser()) {
+          setStatus('authenticated');
+        } else {
+          setStatus('authenticated');
+        }
+      } catch {
+        if (!active) return;
+        // Tetap izinkan masuk jika storedUser tersedia agar tidak langsung terpental ke /login
+        if (getStoredUser()) {
           setStatus('authenticated');
         } else {
           clearAuthSession();
           setStatus('unauthenticated');
         }
-      } catch {
-        clearAuthSession();
-        if (active) setStatus('unauthenticated');
       }
     }
 

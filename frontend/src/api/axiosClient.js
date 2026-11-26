@@ -1,12 +1,16 @@
 import axios from 'axios';
 
-export const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+const rawApiBase = String(import.meta.env.VITE_API_BASE_URL || '').trim();
+export const API_BASE =
+    rawApiBase && !rawApiBase.includes(':5173')
+        ? rawApiBase
+        : 'http://localhost:5000';
 
 const LEGACY_ACCESS_TOKEN_KEY = 'simpro_access_token';
 const LEGACY_TOKEN_KEY = 'token';
 const USER_KEY = 'user';
 
-// Access token disimpan di memori JavaScript (bukan localStorage) untuk mengurangi risiko XSS
+// Access token disimpan di memori JavaScript untuk mengurangi risiko XSS
 let inMemoryAccessToken = null;
 let refreshPromise = null;
 
@@ -44,7 +48,7 @@ export function clearAuthSession() {
 
 const apiClient = axios.create({
     baseURL: API_BASE,
-    withCredentials: true, // wajib agar cookie HttpOnly Refresh Token terkirim ke /api/auth/refresh & /api/auth/logout
+    withCredentials: true,
 });
 
 const refreshClient = axios.create({
@@ -95,13 +99,17 @@ apiClient.interceptors.response.use(
             return Promise.reject(error);
         }
 
+        const reqUrl = String(originalRequest.url || '');
         const isAuthEndpoint =
-            originalRequest.url?.includes('/api/auth/login') ||
-            originalRequest.url?.includes('/api/auth/refresh') ||
-            originalRequest.url?.includes('/api/auth/logout');
+            reqUrl.includes('/api/auth/login') ||
+            reqUrl.includes('/api/auth/register') ||
+            reqUrl.includes('/api/auth/refresh') ||
+            reqUrl.includes('/api/auth/logout');
 
         if (isAuthEndpoint || originalRequest._retry) {
-            redirectToLogin();
+            if (reqUrl.includes('/api/auth/refresh') && !getStoredUser()) {
+                redirectToLogin();
+            }
             return Promise.reject(error);
         }
 
@@ -131,7 +139,9 @@ apiClient.interceptors.response.use(
             return apiClient(originalRequest);
         } catch (refreshError) {
             processQueue(refreshError, null);
-            redirectToLogin();
+            if (!getStoredUser()) {
+                redirectToLogin();
+            }
             return Promise.reject(refreshError);
         } finally {
             isRefreshing = false;

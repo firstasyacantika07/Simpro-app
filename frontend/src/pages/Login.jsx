@@ -75,10 +75,16 @@ export default function Login() {
             setAuthSession({ accessToken, user });
             navigate('/dashboard', { replace: true });
         } catch (err) {
-            setError(
-                err.response?.data?.message ||
-                'Login gagal. Periksa kembali data Anda.'
-            );
+            if (!err?.response) {
+                setError(
+                    'Server backend tidak memberikan respons (ERR_EMPTY_RESPONSE atau koneksi terputus). Pastikan server di port 5000 aktif dan periksa log backend.'
+                );
+            } else {
+                setError(
+                    err.response?.data?.message ||
+                    'Login gagal. Periksa kembali data Anda.'
+                );
+            }
         } finally {
             setLoading(false);
         }
