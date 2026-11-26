@@ -16,7 +16,7 @@ import {
     AlertCircle,
 } from 'lucide-react';
 import { canEditMOS } from '../utils/rbac';
-import apiClient, { getAccessToken } from '../api/axiosClient';
+import apiClient, { extractArray } from '../api/axiosClient';
 
 const INITIAL_FORM = {
     proyek_id: '',
@@ -35,14 +35,6 @@ const parseDecimal = (val) => {
     if (normalized === '') return 0;
     const parsed = parseFloat(normalized);
     return Number.isFinite(parsed) ? parsed : 0;
-};
-
-const extractArray = (payload, keys = ['data']) => {
-    if (Array.isArray(payload)) return payload;
-    for (const key of keys) {
-        if (Array.isArray(payload?.[key])) return payload[key];
-    }
-    return [];
 };
 
 const getSiteLabel = (site) =>
@@ -123,12 +115,8 @@ export default function MosSection({
         proyek_id: selectedProyekId ? String(selectedProyekId) : '',
     });
 
-    const hasWriteAccess = canEditMOS(user?.posisi);
-    const activeToken = getAccessToken() || localStorage.getItem('token');
-    const authHeader = useMemo(
-        () => (activeToken ? { headers: { Authorization: `Bearer ${activeToken}` } } : {}),
-        [activeToken]
-    );
+    const roleValue = user?.posisi || user?.role || '';
+    const hasWriteAccess = canEditMOS(roleValue);
 
     const activeProyekId = selectedProyekId
         ? String(selectedProyekId)
@@ -137,11 +125,6 @@ export default function MosSection({
             : '';
 
     const fetchData = useCallback(async () => {
-        if (!activeToken) {
-            setProyekError('Token autentikasi tidak ditemukan. Silakan login ulang.');
-            return;
-        }
-
         setLoadingProyek(true);
         setProyekError('');
 
@@ -150,8 +133,8 @@ export default function MosSection({
             : '/api/fitur/mos';
 
         const [mosResult, proyekResult] = await Promise.allSettled([
-            apiClient.get(mosUrl, authHeader),
-            apiClient.get('/api/proyek', authHeader),
+            apiClient.get(mosUrl),
+            apiClient.get('/api/proyek'),
         ]);
 
         if (mosResult.status === 'fulfilled') {
@@ -177,7 +160,7 @@ export default function MosSection({
         }));
 
         setLoadingProyek(false);
-    }, [activeToken, authHeader, activeProyekId]);
+    }, [activeProyekId]);
 
     useEffect(() => {
         fetchData();
@@ -337,7 +320,6 @@ export default function MosSection({
                     : `/api/fitur/mos/export/pdf?${params.toString()}`;
 
             const response = await apiClient.get(endpoint, {
-                ...authHeader,
                 responseType: 'blob',
             });
 
@@ -443,9 +425,9 @@ export default function MosSection({
 
         try {
             if (editId) {
-                await apiClient.put(`/api/fitur/mos/${editId}`, payload, authHeader);
+                await apiClient.put(`/api/fitur/mos/${editId}`, payload);
             } else {
-                await apiClient.post('/api/fitur/mos', payload, authHeader);
+                await apiClient.post('/api/fitur/mos', payload);
             }
             setShowForm(false);
             resetForm();
@@ -477,7 +459,7 @@ export default function MosSection({
     const handleDelete = async (id) => {
         if (!confirm('Hapus data material ini?')) return;
         try {
-            await apiClient.delete(`/api/fitur/mos/${id}`, authHeader);
+            await apiClient.delete(`/api/fitur/mos/${id}`);
             fetchData();
         } catch (err) {
             alert(err.response?.data?.message || 'Gagal menghapus data MOS');

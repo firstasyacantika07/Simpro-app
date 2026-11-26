@@ -1,10 +1,7 @@
 import axios from 'axios';
 
-const rawApiBase = String(import.meta.env.VITE_API_BASE_URL || '').trim();
-export const API_BASE =
-    rawApiBase && !rawApiBase.includes(':5173')
-        ? rawApiBase
-        : 'http://localhost:5000';
+const rawApiBase = String(import.meta.env.VITE_API_BASE_URL ?? '').trim();
+export const API_BASE = rawApiBase;
 
 const LEGACY_ACCESS_TOKEN_KEY = 'simpro_access_token';
 const LEGACY_TOKEN_KEY = 'token';
@@ -13,6 +10,14 @@ const USER_KEY = 'user';
 // Access token disimpan di memori JavaScript untuk mengurangi risiko XSS
 let inMemoryAccessToken = null;
 let refreshPromise = null;
+
+export function extractArray(payload, keys = ['data']) {
+    if (Array.isArray(payload)) return payload;
+    for (const key of keys) {
+        if (Array.isArray(payload?.[key])) return payload[key];
+    }
+    return [];
+}
 
 export function getAccessToken() {
     return inMemoryAccessToken;

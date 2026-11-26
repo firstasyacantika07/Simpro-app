@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import axios from 'axios';
 import {
     Plus,
     Pencil,
@@ -16,8 +15,8 @@ import {
     Mail,
     Layers,
 } from 'lucide-react';
+import apiClient, { extractArray } from '../api/axiosClient';
 
-const API_BASE = 'http://localhost:5000';
 const DEFAULT_SITE_IMAGE = '/foto.jpg';
 
 const INITIAL_FORM = {
@@ -28,7 +27,8 @@ const INITIAL_FORM = {
     gambar: '',
 };
 
-const canManageSites = (posisi = '') => {
+const canManageSites = (user) => {
+    const posisi = user?.posisi || user?.role || '';
     const normalized = String(posisi).trim().toLowerCase();
     return (
         normalized === 'pm' ||
@@ -125,78 +125,64 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
 
     const fileInputRef = useRef(null);
 
-    const hasWriteAccess = canManageSites(user?.posisi);
-    const token = localStorage.getItem('token');
+    const hasWriteAccess = canManageSites(user);
+    const roleLabel = user?.posisi || user?.role || 'Pengguna';
 
-    const fetchAnggotaForSites = useCallback(
-        async (sites, authToken) => {
-            if (!authToken || !Array.isArray(sites) || sites.length === 0) {
-                setAnggotaBySite({});
-                return;
+    const fetchAnggotaForSites = useCallback(async (sites) => {
+        if (!Array.isArray(sites) || sites.length === 0) {
+            setAnggotaBySite({});
+            return;
+        }
+
+        const results = await Promise.allSettled(
+            sites.map((site) => apiClient.get(`/api/proyek/${site.id}/anggota`))
+        );
+
+        const nextMap = {};
+        results.forEach((res, idx) => {
+            const siteId = sites[idx]?.id;
+            if (siteId !== undefined && res.status === 'fulfilled') {
+                nextMap[String(siteId)] = extractArray(res.value.data, ['data', 'anggota']);
             }
+        });
+        setAnggotaBySite(nextMap);
+    }, []);
 
-            const headers = { Authorization: `Bearer ${authToken}` };
-            const results = await Promise.allSettled(
-                sites.map((site) =>
-                    axios.get(`${API_BASE}/api/proyek/${site.id}/anggota`, { headers })
-                )
-            );
+    const fetchBangunanForSites = useCallback(async (sites) => {
+        if (!Array.isArray(sites) || sites.length === 0) {
+            setBangunanBySite({});
+            return;
+        }
 
-            const nextMap = {};
-            results.forEach((res, idx) => {
-                const siteId = sites[idx]?.id;
-                if (siteId !== undefined && res.status === 'fulfilled' && Array.isArray(res.value.data)) {
-                    nextMap[String(siteId)] = res.value.data;
-                }
-            });
-            setAnggotaBySite(nextMap);
-        },
-        []
-    );
+        const results = await Promise.allSettled(
+            sites.map((site) => apiClient.get(`/api/proyek/${site.id}/bangunan`))
+        );
 
-    const fetchBangunanForSites = useCallback(
-        async (sites, authToken) => {
-            if (!authToken || !Array.isArray(sites) || sites.length === 0) {
-                setBangunanBySite({});
-                return;
+        const nextMap = {};
+        results.forEach((res, idx) => {
+            const siteId = sites[idx]?.id;
+            if (siteId !== undefined && res.status === 'fulfilled') {
+                nextMap[String(siteId)] = extractArray(res.value.data, ['data', 'bangunan']);
             }
-
-            const headers = { Authorization: `Bearer ${authToken}` };
-            const results = await Promise.allSettled(
-                sites.map((site) =>
-                    axios.get(`${API_BASE}/api/proyek/${site.id}/bangunan`, { headers })
-                )
-            );
-
-            const nextMap = {};
-            results.forEach((res, idx) => {
-                const siteId = sites[idx]?.id;
-                if (siteId !== undefined && res.status === 'fulfilled' && Array.isArray(res.value.data)) {
-                    nextMap[String(siteId)] = res.value.data;
-                }
-            });
-            setBangunanBySite(nextMap);
-        },
-        []
-    );
+        });
+        setBangunanBySite(nextMap);
+    }, []);
 
     const fetchSitesData = useCallback(async () => {
-        if (!token) return;
         setLoading(true);
         setErrorMsg('');
-        const headers = { Authorization: `Bearer ${token}` };
 
         const [resProyek, resProgress] = await Promise.allSettled([
-            axios.get(`${API_BASE}/api/proyek`, { headers }),
-            axios.get(`${API_BASE}/api/fitur/progress`, { headers }),
+            apiClient.get('/api/proyek'),
+            apiClient.get('/api/fitur/progress'),
         ]);
 
-        if (resProyek.status === 'fulfilled' && Array.isArray(resProyek.value.data)) {
-            const sites = resProyek.value.data;
+        if (resProyek.status === 'fulfilled') {
+            const sites = extractArray(resProyek.value.data, ['data', 'proyek']);
             setProyekList(sites);
             await Promise.allSettled([
-                fetchAnggotaForSites(sites, token),
-                fetchBangunanForSites(sites, token),
+                fetchAnggotaForSites(sites),
+                fetchBangunanForSites(sites),
             ]);
         } else {
             setErrorMsg(
@@ -205,12 +191,12 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
             );
         }
 
-        if (resProgress.status === 'fulfilled' && Array.isArray(resProgress.value.data)) {
-            setProgressList(resProgress.value.data);
+        if (resProgress.status === 'fulfilled') {
+            setProgressList(extractArray(resProgress.value.data, ['data', 'progress']));
         }
 
         setLoading(false);
-    }, [token, fetchAnggotaForSites, fetchBangunanForSites]);
+    }, [fetchAnggotaForSites, fetchBangunanForSites]);
 
     useEffect(() => {
         fetchSitesData();
@@ -228,11 +214,9 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
         setBangunanErrorBySite((prev) => ({ ...prev, [siteKey]: '' }));
 
         try {
-            const res = await axios.post(
-                `${API_BASE}/api/proyek/${siteId}/bangunan`,
-                { nama_bangunan: namaBangunan },
-                { headers: { Authorization: `Bearer ${token}` } }
-            );
+            const res = await apiClient.post(`/api/proyek/${siteId}/bangunan`, {
+                nama_bangunan: namaBangunan,
+            });
 
             const createdBangunan = {
                 id: res.data?.id ?? Date.now(),
@@ -318,7 +302,6 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
         }
 
         setSubmitting(true);
-        const headers = { Authorization: `Bearer ${token}` };
         const clampedProgress = Math.min(
             Math.max(Number(form.persentase_progres) || 0, 0),
             100
@@ -334,9 +317,9 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
 
         try {
             if (editId) {
-                await axios.put(`${API_BASE}/api/proyek/${editId}`, payload, { headers });
+                await apiClient.put(`/api/proyek/${editId}`, payload);
             } else {
-                await axios.post(`${API_BASE}/api/proyek`, payload, { headers });
+                await apiClient.post('/api/proyek', payload);
             }
             setShowForm(false);
             resetForm();
@@ -359,9 +342,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
         if (!confirm(`Hapus proyek "${namaProyek}"?`)) return;
 
         try {
-            await axios.delete(`${API_BASE}/api/proyek/${id}`, {
-                headers: { Authorization: `Bearer ${token}` },
-            });
+            await apiClient.delete(`/api/proyek/${id}`);
             await fetchSitesData();
             if (typeof onDataChanged === 'function') {
                 onDataChanged();
@@ -394,14 +375,10 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
         setInviteFeedback(null);
 
         try {
-            const res = await axios.post(
-                `${API_BASE}/api/proyek/${inviteSite.id}/invite`,
-                {
-                    email: inviteEmail.trim(),
-                    ...(inviteRole.trim() ? { role_proyek: inviteRole.trim() } : {}),
-                },
-                { headers: { Authorization: `Bearer ${token}` } }
-            );
+            const res = await apiClient.post(`/api/proyek/${inviteSite.id}/invite`, {
+                email: inviteEmail.trim(),
+                ...(inviteRole.trim() ? { role_proyek: inviteRole.trim() } : {}),
+            });
 
             setInviteFeedback({
                 type: 'success',
@@ -410,16 +387,11 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
             setInviteEmail('');
             setInviteRole('');
 
-            const resAnggota = await axios.get(
-                `${API_BASE}/api/proyek/${inviteSite.id}/anggota`,
-                { headers: { Authorization: `Bearer ${token}` } }
-            );
-            if (Array.isArray(resAnggota.data)) {
-                setAnggotaBySite((prev) => ({
-                    ...prev,
-                    [String(inviteSite.id)]: resAnggota.data,
-                }));
-            }
+            const resAnggota = await apiClient.get(`/api/proyek/${inviteSite.id}/anggota`);
+            setAnggotaBySite((prev) => ({
+                ...prev,
+                [String(inviteSite.id)]: extractArray(resAnggota.data, ['data', 'anggota']),
+            }));
         } catch (err) {
             setInviteFeedback({
                 type: 'error',
@@ -480,7 +452,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
                     </h2>
                     <p className="text-sm text-slate-400">
                         Menampilkan seluruh proyek untuk akun{' '}
-                        <span className="text-slate-200 font-medium">{user?.nama}</span> ({user?.posisi})
+                        <span className="text-slate-200 font-medium">{user?.nama}</span> ({roleLabel})
                     </p>
                 </div>
 
@@ -826,7 +798,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
                                                                 ...prev,
                                                                 [siteKey]: e.target.value,
                                                             }));
-                                                            if (bangunanError) {
+                                                            if (buildingError) {
                                                                 setBangunanErrorBySite((prev) => ({
                                                                     ...prev,
                                                                     [siteKey]: '',

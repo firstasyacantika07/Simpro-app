@@ -7,10 +7,12 @@ const { authenticateToken } = require('../middleware/authMiddleware');
 
 const parseNum = (val) => {
     if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
-    if (!val) return 0;
+    if (val === null || val === undefined || val === '') return 0;
     const n = parseFloat(String(val).trim().replace(',', '.'));
     return Number.isFinite(n) ? n : 0;
 };
+
+const roundTwo = (val) => Number(parseNum(val).toFixed(2));
 
 const getMasuk = (row) => {
     const masuk = parseNum(row.jumlah_masuk);
@@ -31,6 +33,9 @@ const getDateStr = (row) => {
     }
     return String(raw).split('T')[0].slice(0, 10);
 };
+
+const buildMaterialKey = (nama, satuan) =>
+    `${String(nama || '').trim().toLowerCase()}__${String(satuan || 'Unit').trim().toLowerCase()}`;
 
 const formatDateId = (dateStr) => {
     if (!dateStr) return '-';
@@ -66,20 +71,34 @@ const formatExportTimestamp = () => {
     return { datePart, fullText: `${formatDateId(datePart)} ${timePart} WIB` };
 };
 
+const parseQueryFilters = (query = {}) => {
+    const rawProyekId = query.proyek_id ?? query.proyekId ?? '';
+    const numericProyekId = Number(rawProyekId);
+    const proyekId =
+        String(rawProyekId).trim() !== '' && Number.isFinite(numericProyekId) && numericProyekId > 0
+            ? numericProyekId
+            : null;
+
+    const month = String(query.month ?? '').trim();
+    const materialKey = String(query.material_key ?? query.materialKey ?? '').trim().toLowerCase();
+
+    return { proyekId, month, materialKey };
+};
+
 async function queryFilteredMos({ proyekId, month, materialKey }) {
     const conditions = [];
     const params = [];
 
     if (proyekId) {
         conditions.push('m.proyek_id = ?');
-        params.push(Number(proyekId));
+        params.push(proyekId);
     }
 
     let projectInfo = null;
     if (proyekId) {
         const [projRows] = await db.query(
             'SELECT id, nama_proyek, lokasi, status FROM proyek WHERE id = ? LIMIT 1',
-            [Number(proyekId)]
+            [proyekId]
         );
         projectInfo = projRows[0] || null;
     }
@@ -87,10 +106,10 @@ async function queryFilteredMos({ proyekId, month, materialKey }) {
     const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const [rows] = await db.query(
         `SELECT m.*, p.nama_proyek, p.lokasi AS lokasi_proyek
-     FROM mos m
-     LEFT JOIN proyek p ON p.id = m.proyek_id
-     ${whereSql}
-     ORDER BY COALESCE(m.tanggal_masuk, m.tanggal_update, m.created_at) DESC, m.id DESC`,
+         FROM mos m
+         LEFT JOIN proyek p ON p.id = m.proyek_id
+         ${whereSql}
+         ORDER BY COALESCE(m.tanggal_masuk, m.tanggal_update, m.created_at) DESC, m.id DESC`,
         params
     );
 
@@ -102,9 +121,7 @@ async function queryFilteredMos({ proyekId, month, materialKey }) {
                 if (rowMonth !== month) return false;
             }
             if (materialKey) {
-                const nama = String(row.nama_material || '').trim().toLowerCase();
-                const satuan = String(row.satuan || 'Unit').trim().toLowerCase();
-                if (`${nama}__${satuan}` !== String(materialKey).trim().toLowerCase()) {
+                if (buildMaterialKey(row.nama_material, row.satuan) !== materialKey) {
                     return false;
                 }
             }
@@ -112,9 +129,9 @@ async function queryFilteredMos({ proyekId, month, materialKey }) {
         })
         .map((row, idx) => {
             const dateStr = getDateStr(row);
-            const jumlahMasuk = Number(getMasuk(row).toFixed(2));
-            const jumlahTerpakai = Number(getTerpakai(row).toFixed(2));
-            const sisa = Number((jumlahMasuk - jumlahTerpakai).toFixed(2));
+            const jumlahMasuk = roundTwo(getMasuk(row));
+            const jumlahTerpakai = roundTwo(getTerpakai(row));
+            const sisa = roundTwo(Math.max(jumlahMasuk - jumlahTerpakai, 0));
             return {
                 no: idx + 1,
                 id: row.id,
@@ -145,8 +162,8 @@ async function queryFilteredMos({ proyekId, month, materialKey }) {
 // GET /api/fitur/mos/export/excel
 router.get('/mos/export/excel', authenticateToken, async (req, res) => {
     try {
-        const { proyek_id: proyekId, month, material_key: materialKey } = req.query;
-        const { rows, projectInfo } = await queryFilteredMos({ proyekId, month, materialKey });
+        const filters = parseQueryFilters(req.query);
+        const { rows, projectInfo } = await queryFilteredMos(filters);
         const { datePart, fullText } = formatExportTimestamp();
 
         const workbook = new ExcelJS.Workbook();
@@ -154,7 +171,7 @@ router.get('/mos/export/excel', authenticateToken, async (req, res) => {
         workbook.created = new Date();
 
         const sheet = workbook.addWorksheet('Data MOS', {
-            views: [{ state: 'frozen', ySplit: 8 }],
+            views: [{ state: 'frozen', ySplit: 6 }],
         });
 
         sheet.mergeCells('A1:H1');
@@ -171,12 +188,15 @@ router.get('/mos/export/excel', authenticateToken, async (req, res) => {
         sheet.getCell('E2').value = `Lokasi: ${projectInfo?.lokasi || '-'}`;
 
         sheet.mergeCells('A3:D3');
-        sheet.getCell('A3').value = `Periode Bulan: ${formatMonthLabel(month)}`;
+        sheet.getCell('A3').value = `Periode Bulan: ${formatMonthLabel(filters.month)}`;
         sheet.mergeCells('E3:H3');
         sheet.getCell('E3').value = `Waktu Export: ${fullText}`;
 
+        const materialFilterLabel = filters.materialKey
+            ? filters.materialKey.split('__')[0]
+            : 'Semua Material';
         sheet.mergeCells('A4:H4');
-        sheet.getCell('A4').value = `Filter Material: ${materialKey ? materialKey.split('__')[0] : 'Semua Material'} | Diunduh oleh: ${req.user?.nama || req.user?.email || '-'}`;
+        sheet.getCell('A4').value = `Filter Material: ${materialFilterLabel} | Diunduh oleh: ${req.user?.nama || req.user?.email || '-'}`;
 
         [2, 3, 4].forEach((rIdx) => {
             const row = sheet.getRow(rIdx);
@@ -297,9 +317,10 @@ router.get('/mos/export/excel', authenticateToken, async (req, res) => {
             let maxLen = baseWidth;
             col.eachCell({ includeEmpty: false }, (cell, rowNum) => {
                 if (rowNum <= 4) return;
-                const valStr = cell.value && typeof cell.value === 'object' && cell.value.result !== undefined
-                    ? String(cell.value.result)
-                    : String(cell.value || '');
+                const valStr =
+                    cell.value && typeof cell.value === 'object' && cell.value.result !== undefined
+                        ? String(cell.value.result)
+                        : String(cell.value || '');
                 if (!valStr.startsWith('=')) {
                     maxLen = Math.max(maxLen, Math.min(valStr.length + 4, 48));
                 }
@@ -312,7 +333,7 @@ router.get('/mos/export/excel', authenticateToken, async (req, res) => {
             'Content-Type',
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         );
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
 
         const buffer = await workbook.xlsx.writeBuffer();
         return res.send(Buffer.from(buffer));
@@ -327,14 +348,11 @@ router.get('/mos/export/excel', authenticateToken, async (req, res) => {
 // GET /api/fitur/mos/export/pdf
 router.get('/mos/export/pdf', authenticateToken, async (req, res) => {
     try {
-        const { proyek_id: proyekId, month, material_key: materialKey } = req.query;
-        const { rows, projectInfo } = await queryFilteredMos({ proyekId, month, materialKey });
+        const filters = parseQueryFilters(req.query);
+        const { rows, projectInfo } = await queryFilteredMos(filters);
         const { datePart, fullText } = formatExportTimestamp();
 
         const filename = `MOS_Simpro_${datePart}.pdf`;
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-
         const doc = new PDFDocument({
             size: 'A4',
             layout: 'landscape',
@@ -342,7 +360,12 @@ router.get('/mos/export/pdf', authenticateToken, async (req, res) => {
             bufferPages: true,
         });
 
-        doc.pipe(res);
+        const chunks = [];
+        const pdfReady = new Promise((resolve, reject) => {
+            doc.on('data', (chunk) => chunks.push(chunk));
+            doc.on('end', () => resolve(Buffer.concat(chunks)));
+            doc.on('error', reject);
+        });
 
         const usableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
         const columns = [
@@ -353,8 +376,17 @@ router.get('/mos/export/pdf', authenticateToken, async (req, res) => {
             { key: 'jumlah_masuk', label: 'Jumlah Masuk', width: 92, align: 'right' },
             { key: 'jumlah_terpakai', label: 'Terpakai', width: 88, align: 'right' },
             { key: 'sisa', label: 'Sisa', width: 82, align: 'right' },
-            { key: 'satuan', label: 'Satuan', width: usableWidth - (34 + 92 + 82 + 252 + 92 + 88 + 82), align: 'left' },
+            {
+                key: 'satuan',
+                label: 'Satuan',
+                width: usableWidth - (34 + 92 + 82 + 252 + 92 + 88 + 82),
+                align: 'left',
+            },
         ];
+
+        const materialFilterLabel = filters.materialKey
+            ? filters.materialKey.split('__')[0]
+            : 'Semua Material';
 
         const drawHeaderBanner = () => {
             const x = doc.page.margins.left;
@@ -369,15 +401,11 @@ router.get('/mos/export/pdf', authenticateToken, async (req, res) => {
             const metaY = y + 50;
             doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(9.5)
                 .text(`Proyek / Site: ${projectInfo?.nama_proyek || 'Semua Proyek'}`, x, metaY)
-                .text(`Periode: ${formatMonthLabel(month)}`, x + 390, metaY);
+                .text(`Periode: ${formatMonthLabel(filters.month)}`, x + 390, metaY);
 
             doc.fillColor('#334155').font('Helvetica').fontSize(9)
                 .text(`Lokasi: ${projectInfo?.lokasi || '-'}`, x, metaY + 14)
-                .text(
-                    `Filter Material: ${materialKey ? materialKey.split('__')[0] : 'Semua Material'}`,
-                    x + 390,
-                    metaY + 14
-                );
+                .text(`Filter Material: ${materialFilterLabel}`, x + 390, metaY + 14);
 
             return metaY + 34;
         };
@@ -407,10 +435,15 @@ router.get('/mos/export/pdf', authenticateToken, async (req, res) => {
 
         if (rows.length === 0) {
             doc.fillColor('#64748b').font('Helvetica').fontSize(10)
-                .text('Tidak ada data Material On Site sesuai filter yang dipilih.', doc.page.margins.left, currentY + 18, {
-                    width: usableWidth,
-                    align: 'center',
-                });
+                .text(
+                    'Tidak ada data Material On Site sesuai filter yang dipilih.',
+                    doc.page.margins.left,
+                    currentY + 18,
+                    {
+                        width: usableWidth,
+                        align: 'center',
+                    }
+                );
         } else {
             let totalMasuk = 0;
             let totalTerpakai = 0;
@@ -512,13 +545,16 @@ router.get('/mos/export/pdf', authenticateToken, async (req, res) => {
         }
 
         doc.end();
+        const pdfBuffer = await pdfReady;
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+        return res.send(pdfBuffer);
     } catch (error) {
-        if (!res.headersSent) {
-            return res.status(500).json({
-                message: 'Gagal mengekspor data MOS ke PDF',
-                error: error.message,
-            });
-        }
+        return res.status(500).json({
+            message: 'Gagal mengekspor data MOS ke PDF',
+            error: error.message,
+        });
     }
 });
 

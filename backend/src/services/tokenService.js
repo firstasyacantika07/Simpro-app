@@ -52,6 +52,15 @@ function buildAccessToken(user) {
   };
 }
 
+function verifyAccessToken(rawToken) {
+  const secret = getJwtSecret();
+  const decoded = jwt.verify(String(rawToken), secret);
+  if (decoded?.type && decoded.type !== 'access') {
+    throw new Error('Tipe token bukan access token');
+  }
+  return decoded;
+}
+
 function buildRefreshToken(user) {
   const refreshSecret = getJwtRefreshSecret();
   const jti = crypto.randomBytes(16).toString('hex');
@@ -92,6 +101,7 @@ function verifyRefreshToken(rawToken) {
 
 module.exports = {
   buildAccessToken,
+  verifyAccessToken,
   buildRefreshToken,
   verifyRefreshToken,
 };

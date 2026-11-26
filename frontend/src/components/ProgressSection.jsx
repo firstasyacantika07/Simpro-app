@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import axios from 'axios';
 import {
     Plus,
     Pencil,
@@ -15,8 +14,7 @@ import {
     RotateCcw,
 } from 'lucide-react';
 import { canEditProgress } from '../utils/rbac';
-
-const API_BASE = 'http://localhost:5000/api';
+import apiClient, { extractArray } from '../api/axiosClient';
 
 const CUACA_OPTIONS = [
     'Cerah',
@@ -56,14 +54,6 @@ const formatDecimalPercent = (value) => {
 
 const isImageDataUrl = (val = '') =>
     typeof val === 'string' && val.startsWith('data:image/');
-
-const extractArray = (payload, keys = ['data']) => {
-    if (Array.isArray(payload)) return payload;
-    for (const key of keys) {
-        if (Array.isArray(payload?.[key])) return payload[key];
-    }
-    return [];
-};
 
 const getSiteLabel = (site) =>
     site?.nama_proyek ||
@@ -118,7 +108,7 @@ const getWeekRangeLabel = (mondayKey) => {
 export default function ProgressSection({
     user,
     selectedProyekId = null,
-    onSelectProyekId = () => {},
+    onSelectProyekId = () => { },
 }) {
     const [progressList, setProgressList] = useState([]);
     const [proyekList, setProyekList] = useState([]);
@@ -139,12 +129,8 @@ export default function ProgressSection({
 
     const fileInputRef = useRef(null);
 
-    const hasWriteAccess = canEditProgress(user?.posisi);
-    const token = localStorage.getItem('token');
-    const authHeader = useMemo(
-        () => ({ headers: { Authorization: `Bearer ${token}` } }),
-        [token]
-    );
+    const roleValue = user?.posisi || user?.role || '';
+    const hasWriteAccess = canEditProgress(roleValue);
 
     const activeProyekId = selectedProyekId
         ? String(selectedProyekId)
@@ -154,17 +140,14 @@ export default function ProgressSection({
 
     const fetchBangunan = useCallback(
         async (proyekId, preferredBangunanId = null, preferredNamaBangunan = '') => {
-            if (!token || !proyekId) {
+            if (!proyekId) {
                 setBangunanList([]);
                 return;
             }
 
             setLoadingBangunan(true);
             try {
-                const res = await axios.get(
-                    `${API_BASE}/proyek/${proyekId}/bangunan`,
-                    authHeader
-                );
+                const res = await apiClient.get(`/api/proyek/${proyekId}/bangunan`);
                 const rows = extractArray(res.data, ['data', 'bangunan']);
                 setBangunanList(rows);
 
@@ -228,25 +211,20 @@ export default function ProgressSection({
                 setLoadingBangunan(false);
             }
         },
-        [token, authHeader]
+        []
     );
 
     const fetchData = useCallback(async () => {
-        if (!token) {
-            setProyekError('Token autentikasi tidak ditemukan. Silakan login ulang.');
-            return;
-        }
-
         setLoadingProyek(true);
         setProyekError('');
 
         const progUrl = activeProyekId
-            ? `${API_BASE}/fitur/progress?proyek_id=${encodeURIComponent(activeProyekId)}`
-            : `${API_BASE}/fitur/progress`;
+            ? `/api/fitur/progress?proyek_id=${encodeURIComponent(activeProyekId)}`
+            : '/api/fitur/progress';
 
         const [progResult, proyekResult] = await Promise.allSettled([
-            axios.get(progUrl, authHeader),
-            axios.get(`${API_BASE}/proyek`, authHeader),
+            apiClient.get(progUrl),
+            apiClient.get('/api/proyek'),
         ]);
 
         if (progResult.status === 'fulfilled') {
@@ -274,7 +252,7 @@ export default function ProgressSection({
         }));
 
         setLoadingProyek(false);
-    }, [token, authHeader, activeProyekId, user?.nama]);
+    }, [activeProyekId, user?.nama]);
 
     useEffect(() => {
         fetchData();
@@ -353,12 +331,9 @@ export default function ProgressSection({
 
         return Array.from(grouped.values())
             .sort((a, b) => b.weekKey.localeCompare(a.weekKey))
-            .map((entry, idx) => {
+            .map((entry) => {
                 const sortedDates = Array.from(entry.dates).sort((a, b) => b.localeCompare(a));
-                // Hitung rata-rata bobot pada minggu tersebut
                 const avgBobot = entry.count > 0 ? entry.sumBobot / entry.count : 0;
-                const prevWeek = idx < grouped.size - 1 ? null : null;
-                void prevWeek;
                 return {
                     weekKey: entry.weekKey,
                     rangeLabel: entry.rangeLabel,
@@ -465,13 +440,9 @@ export default function ProgressSection({
 
         try {
             if (editId) {
-                await axios.put(
-                    `${API_BASE}/fitur/progress/${editId}`,
-                    payload,
-                    authHeader
-                );
+                await apiClient.put(`/api/fitur/progress/${editId}`, payload);
             } else {
-                await axios.post(`${API_BASE}/fitur/progress`, payload, authHeader);
+                await apiClient.post('/api/fitur/progress', payload);
             }
             setShowForm(false);
             resetForm();
@@ -514,7 +485,7 @@ export default function ProgressSection({
     const handleDelete = async (id) => {
         if (!confirm('Hapus laporan progress harian ini?')) return;
         try {
-            await axios.delete(`${API_BASE}/fitur/progress/${id}`, authHeader);
+            await apiClient.delete(`/api/fitur/progress/${id}`);
             fetchData();
         } catch (err) {
             alert(err.response?.data?.message || 'Gagal menghapus laporan');
@@ -665,11 +636,10 @@ export default function ProgressSection({
                                                     );
                                                 }
                                             }}
-                                            className={`p-3.5 rounded-xl border transition cursor-pointer ${
-                                                isSelectedWeek
+                                            className={`p-3.5 rounded-xl border transition cursor-pointer ${isSelectedWeek
                                                     ? 'bg-emerald-500/15 border-emerald-500/50'
                                                     : 'bg-[#131c2e] border-slate-800 hover:border-slate-700'
-                                            }`}
+                                                }`}
                                         >
                                             <div className="flex items-center justify-between gap-2">
                                                 <span className="text-xs font-semibold text-white">
@@ -695,11 +665,10 @@ export default function ProgressSection({
                                                                     prev === dKey ? '' : dKey
                                                                 );
                                                             }}
-                                                            className={`px-2 py-0.5 rounded text-[10px] font-medium transition cursor-pointer ${
-                                                                filterTanggal === dKey
+                                                            className={`px-2 py-0.5 rounded text-[10px] font-medium transition cursor-pointer ${filterTanggal === dKey
                                                                     ? 'bg-emerald-500 text-slate-950 font-semibold'
                                                                     : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'
-                                                            }`}
+                                                                }`}
                                                         >
                                                             {formatTanggalIndo(dKey)}
                                                         </button>

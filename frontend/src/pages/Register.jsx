@@ -1,13 +1,15 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Eye, EyeOff } from 'lucide-react';
-import apiClient, { setAuthSession } from '../api/axiosClient';
+import { CheckCircle2, Eye, EyeOff } from 'lucide-react';
+import apiClient from '../api/axiosClient';
 import backgroundImage from '../assets/Background.jpg';
 
 const PROJECT_BG_IMAGE = backgroundImage;
 
 export default function Register() {
     const navigate = useNavigate();
+    const redirectTimerRef = useRef(null);
+
     const [formData, setFormData] = useState({
         nama: '',
         posisi: 'Staff Proyek',
@@ -20,11 +22,21 @@ export default function Register() {
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
     const [imgError, setImgError] = useState(false);
     const [error, setError] = useState('');
+    const [successMsg, setSuccessMsg] = useState('');
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        return () => {
+            if (redirectTimerRef.current) {
+                clearTimeout(redirectTimerRef.current);
+            }
+        };
+    }, []);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
+        setSuccessMsg('');
 
         if (formData.password !== formData.confirmPassword) {
             setError('Konfirmasi password tidak cocok dengan password.');
@@ -43,17 +55,20 @@ export default function Register() {
             };
 
             const res = await apiClient.post('/api/auth/register', payload);
-            const accessToken = res.data?.accessToken || res.data?.token;
-            const user = res.data?.user;
+            const message =
+                res.data?.message ||
+                'Akun berhasil terdaftar! Anda akan diarahkan ke halaman login.';
 
-            if (accessToken && user) {
-                setAuthSession({ accessToken, user });
-                navigate('/dashboard', { replace: true });
-                return;
-            }
+            setSuccessMsg(message);
+            setFormData((prev) => ({
+                ...prev,
+                password: '',
+                confirmPassword: '',
+            }));
 
-            alert('Registrasi berhasil! Silakan login.');
-            navigate('/login');
+            redirectTimerRef.current = setTimeout(() => {
+                navigate('/login', { replace: true });
+            }, 1500);
         } catch (err) {
             if (err.response?.status === 404) {
                 setError(
@@ -185,6 +200,17 @@ export default function Register() {
                         </p>
                     </div>
 
+                    {/* Success Notification */}
+                    {successMsg && (
+                        <div
+                            role="status"
+                            className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm px-4 py-3 rounded-lg mb-5 flex items-center gap-2.5 text-left"
+                        >
+                            <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                            <span>{successMsg}</span>
+                        </div>
+                    )}
+
                     {/* Error Alert */}
                     {error && (
                         <div className="bg-red-500/10 border border-red-500/30 text-red-300 text-sm px-4 py-3 rounded-lg mb-5 text-left">
@@ -307,7 +333,7 @@ export default function Register() {
 
                         <button
                             type="submit"
-                            disabled={loading}
+                            disabled={loading || Boolean(successMsg)}
                             className="w-full mt-2 bg-blue-500 hover:bg-blue-400 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg transition flex items-center justify-center gap-2 cursor-pointer"
                         >
                             {loading ? (

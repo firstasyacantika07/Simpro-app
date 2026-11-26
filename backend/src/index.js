@@ -9,19 +9,35 @@ const proyekRoutes = require('./routes/proyekRoutes');
 const fiturRoutes = require('./routes/fiturRoutes');
 const mosRoutes = require('./routes/mosRoutes');
 const progressRoutes = require('./routes/progressRoutes');
+const mosExportRoutes = require('./routes/mosExportRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 app.set('trust proxy', 1);
 
+const allowedOrigins = String(
+    process.env.CLIENT_URL || 'http://localhost:5173,http://127.0.0.1:5173'
+)
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
 app.use(
     cors({
-        origin: process.env.CLIENT_URL || 'http://localhost:5173',
+        origin(origin, callback) {
+            // Izinkan request non-browser / same-origin (tanpa Origin header) atau origin yang terdaftar
+            if (!origin || allowedOrigins.includes(origin)) {
+                return callback(null, true);
+            }
+            return callback(new Error(`Origin ${origin} tidak diizinkan oleh CORS.`));
+        },
         credentials: true,
     })
 );
+
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
 // Endpoint autentikasi
@@ -32,6 +48,7 @@ app.use('/api/proyek', authenticateToken, proyekRoutes);
 app.use('/api/fitur', authenticateToken, fiturRoutes);
 app.use('/api', authenticateToken, mosRoutes);
 app.use('/api', authenticateToken, progressRoutes);
+app.use('/api/fitur', mosExportRoutes);
 
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', service: 'SIMPRO API' });

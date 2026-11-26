@@ -848,10 +848,17 @@ export default function Dashboard() {
                 return;
             }
 
+            if (!storedUser) {
+                if (active) {
+                    clearSessionAndRedirect();
+                }
+                return;
+            }
+
             try {
                 const refreshed = await refreshAccessToken();
                 const resolvedUser = refreshed?.user || storedUser;
-                if (active && resolvedUser) {
+                if (active && refreshed?.accessToken && resolvedUser) {
                     setUser(resolvedUser);
                     loadDashboardData();
                 } else if (active) {
@@ -859,12 +866,7 @@ export default function Dashboard() {
                 }
             } catch {
                 if (active) {
-                    if (storedUser) {
-                        setUser(storedUser);
-                        loadDashboardData();
-                    } else {
-                        clearSessionAndRedirect();
-                    }
+                    clearSessionAndRedirect();
                 }
             }
         }
@@ -1414,7 +1416,7 @@ export default function Dashboard() {
 
                             {/* Main Grid */}
                             <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
-                                {/* Baris Atas: MOS Full-Width (sejajar hingga ujung kanan) */}
+                                {/* Baris Atas: MOS Full-Width */}
                                 <section className="xl:col-span-12 bg-[#0e1626] border border-slate-800/80 rounded-2xl p-5">
                                     <div className="flex items-center justify-between gap-2 mb-4">
                                         <h2 className="text-sm sm:text-base font-semibold text-white leading-snug">
@@ -1434,7 +1436,6 @@ export default function Dashboard() {
 
                                 {/* Baris Bawah Kiri: Sites & Progress Harian */}
                                 <div className="xl:col-span-7 space-y-5">
-                                    {/* Sites Card */}
                                     <section className="bg-[#0e1626] border border-slate-800/80 rounded-2xl p-5">
                                         <div className="flex items-center justify-between mb-4">
                                             <h2 className="text-base font-semibold text-white">Sites</h2>
@@ -1494,7 +1495,6 @@ export default function Dashboard() {
                                         )}
                                     </section>
 
-                                    {/* Progress Harian Line Chart */}
                                     <section className="bg-[#0e1626] border border-slate-800/80 rounded-2xl p-5">
                                         <div className="flex items-center justify-between mb-2">
                                             <h2 className="text-base font-semibold text-white">
@@ -1518,7 +1518,6 @@ export default function Dashboard() {
 
                                 {/* Baris Bawah Kanan: Weather & Aktivitas Terbaru */}
                                 <div className="xl:col-span-5 space-y-5">
-                                    {/* Real Weather Widget */}
                                     <section className="bg-[#0e1626] border border-slate-800/80 rounded-2xl p-5">
                                         <div className="flex items-center justify-between mb-3">
                                             <span className="text-sm font-semibold text-white truncate">
@@ -1580,7 +1579,6 @@ export default function Dashboard() {
                                         </div>
                                     </section>
 
-                                    {/* Aktivitas Terbaru */}
                                     <section className="bg-[#0e1626] border border-slate-800/80 rounded-2xl p-5">
                                         <div className="flex items-center justify-between mb-4">
                                             <h2 className="text-base font-semibold text-white">
