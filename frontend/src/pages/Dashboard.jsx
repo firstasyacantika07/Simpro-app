@@ -40,6 +40,16 @@ const DEFAULT_WEATHER_COORDS = {
     locationName: 'Kab. Madiun',
 };
 
+const parseStoredUser = (rawUser) => {
+    if (!rawUser) return null;
+    try {
+        const parsed = JSON.parse(rawUser);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+        return null;
+    }
+};
+
 const extractArray = (payload, keys = ['data']) => {
     if (Array.isArray(payload)) return payload;
     for (const key of keys) {
@@ -717,6 +727,13 @@ export default function Dashboard() {
         locationName: DEFAULT_WEATHER_COORDS.locationName,
     });
 
+    const clearSessionAndRedirect = useCallback(() => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        setUser(null);
+        navigate('/login', { replace: true });
+    }, [navigate]);
+
     const fetchRealWeather = useCallback(async (lat, lon, locName) => {
         try {
             const url =
@@ -761,6 +778,8 @@ export default function Dashboard() {
     }, []);
 
     useEffect(() => {
+        if (!user) return;
+
         fetchRealWeather(
             DEFAULT_WEATHER_COORDS.latitude,
             DEFAULT_WEATHER_COORDS.longitude,
@@ -776,7 +795,7 @@ export default function Dashboard() {
                         'Lokasi Saat Ini'
                     );
                 },
-                () => {},
+                () => { },
                 { timeout: 6000 }
             );
         }
@@ -790,7 +809,7 @@ export default function Dashboard() {
         }, 15 * 60 * 1000);
 
         return () => clearInterval(timer);
-    }, [fetchRealWeather]);
+    }, [user, fetchRealWeather]);
 
     const loadDashboardData = useCallback(async (token) => {
         setLoadingData(true);
@@ -801,6 +820,16 @@ export default function Dashboard() {
             axios.get(`${API_BASE}/api/fitur/mos`, { headers }),
             axios.get(`${API_BASE}/api/fitur/progress`, { headers }),
         ]);
+
+        const isUnauthorized = [resProyek, resMos, resProgress].some(
+            (r) => r.status === 'rejected' && r.reason?.response?.status === 401
+        );
+
+        if (isUnauthorized) {
+            setLoadingData(false);
+            clearSessionAndRedirect();
+            return;
+        }
 
         if (resProyek.status === 'fulfilled') {
             setProyekList(extractArray(resProyek.value.data, ['data', 'proyek']));
@@ -821,28 +850,35 @@ export default function Dashboard() {
         }
 
         setLoadingData(false);
-    }, []);
+    }, [clearSessionAndRedirect]);
 
     useEffect(() => {
-        const storedUser = localStorage.getItem('user');
         const token = localStorage.getItem('token');
-        if (!storedUser || !token) {
-            navigate('/login');
+        const parsedUser = parseStoredUser(localStorage.getItem('user'));
+
+        if (!token || !parsedUser) {
+            clearSessionAndRedirect();
             return;
         }
-        setUser(JSON.parse(storedUser));
+
+        setUser(parsedUser);
         loadDashboardData(token);
-    }, [navigate, loadDashboardData]);
+    }, [clearSessionAndRedirect, loadDashboardData]);
 
     const handleRefresh = useCallback(() => {
         const token = localStorage.getItem('token');
-        if (token) loadDashboardData(token);
+        const parsedUser = parseStoredUser(localStorage.getItem('user'));
+        if (!token || !parsedUser) {
+            clearSessionAndRedirect();
+            return;
+        }
+        loadDashboardData(token);
         fetchRealWeather(
             DEFAULT_WEATHER_COORDS.latitude,
             DEFAULT_WEATHER_COORDS.longitude,
             DEFAULT_WEATHER_COORDS.locationName
         );
-    }, [loadDashboardData, fetchRealWeather]);
+    }, [clearSessionAndRedirect, loadDashboardData, fetchRealWeather]);
 
     const markNotificationsAsRead = useCallback((idsToMark) => {
         if (!Array.isArray(idsToMark) || idsToMark.length === 0) return;
@@ -874,9 +910,7 @@ export default function Dashboard() {
     }, []);
 
     const handleLogout = () => {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        navigate('/login');
+        clearSessionAndRedirect();
     };
 
     const progressByProyek = useMemo(() => {
