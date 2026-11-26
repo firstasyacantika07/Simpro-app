@@ -1,29 +1,83 @@
+import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
-
-function hasValidSession() {
-  const token = localStorage.getItem('token');
-  const rawUser = localStorage.getItem('user');
-  if (!token || !rawUser) return false;
-
-  try {
-    const parsedUser = JSON.parse(rawUser);
-    return Boolean(parsedUser && typeof parsedUser === 'object');
-  } catch {
-    return false;
-  }
-}
+import {
+  getAccessToken,
+  getStoredUser,
+  refreshAccessToken,
+  clearAuthSession,
+} from './api/axiosClient';
 
 function ProtectedRoute({ children }) {
-  if (!hasValidSession()) {
+  const [status, setStatus] = useState(() => {
+    const token = getAccessToken();
+    const user = getStoredUser();
+    if (token && user) return 'authenticated';
+    if (!user) return 'unauthenticated';
+    return 'checking';
+  });
+
+  useEffect(() => {
+    let active = true;
+
+    async function verifyOrRefresh() {
+      const token = getAccessToken();
+      const user = getStoredUser();
+
+      if (!user) {
+        clearAuthSession();
+        if (active) setStatus('unauthenticated');
+        return;
+      }
+
+      if (token) {
+        if (active) setStatus('authenticated');
+        return;
+      }
+
+      try {
+        const refreshed = await refreshAccessToken();
+        if (!active) return;
+
+        if (refreshed?.accessToken && (refreshed?.user || getStoredUser())) {
+          setStatus('authenticated');
+        } else {
+          clearAuthSession();
+          setStatus('unauthenticated');
+        }
+      } catch {
+        clearAuthSession();
+        if (active) setStatus('unauthenticated');
+      }
+    }
+
+    if (status === 'checking') {
+      verifyOrRefresh();
+    }
+
+    return () => {
+      active = false;
+    };
+  }, [status]);
+
+  if (status === 'checking') {
+    return (
+      <div className="min-h-screen bg-[#070c16] text-slate-300 flex items-center justify-center text-sm">
+        Memeriksa sesi autentikasi...
+      </div>
+    );
+  }
+
+  if (status === 'unauthenticated') {
     return <Navigate to="/login" replace />;
   }
+
   return children;
 }
 
-export default function App() {
+function App() {
   return (
     <BrowserRouter>
       <Routes>
@@ -43,3 +97,5 @@ export default function App() {
     </BrowserRouter>
   );
 }
+
+export default App;

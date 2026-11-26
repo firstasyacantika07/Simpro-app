@@ -1,7 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import axios from 'axios';
 import backgroundImage from '../assets/Background.jpg';
+import apiClient, {
+    getAccessToken,
+    getStoredUser,
+    refreshAccessToken,
+    setAuthSession,
+} from '../api/axiosClient';
 
 const PROJECT_BG_IMAGE = backgroundImage;
 
@@ -18,6 +23,35 @@ export default function Login() {
     const [resetEmail, setResetEmail] = useState('');
     const [newPassword, setNewPassword] = useState('');
     const [resetMsg, setResetMsg] = useState('');
+    const [resetLoading, setResetLoading] = useState(false);
+
+    useEffect(() => {
+        let active = true;
+
+        async function checkExistingSession() {
+            if (getAccessToken() && getStoredUser()) {
+                navigate('/dashboard', { replace: true });
+                return;
+            }
+
+            if (!getStoredUser()) return;
+
+            try {
+                const refreshed = await refreshAccessToken();
+                if (active && refreshed?.accessToken) {
+                    navigate('/dashboard', { replace: true });
+                }
+            } catch {
+                // Biarkan di halaman login jika tidak ada refresh token valid
+            }
+        }
+
+        checkExistingSession();
+
+        return () => {
+            active = false;
+        };
+    }, [navigate]);
 
     const handleLogin = async (e) => {
         e.preventDefault();
@@ -25,15 +59,21 @@ export default function Login() {
         setLoading(true);
 
         try {
-            const res = await axios.post(
-                'http://localhost:5000/api/auth/login',
-                { identifier, password }
-            );
+            const res = await apiClient.post('/api/auth/login', {
+                identifier: identifier.trim(),
+                password,
+            });
 
-            localStorage.setItem('token', res.data.token);
-            localStorage.setItem('user', JSON.stringify(res.data.user));
+            const accessToken = res.data?.accessToken || res.data?.token;
+            const user = res.data?.user;
 
-            navigate('/dashboard');
+            if (!accessToken || !user) {
+                setError('Respons login tidak lengkap dari server.');
+                return;
+            }
+
+            setAuthSession({ accessToken, user });
+            navigate('/dashboard', { replace: true });
         } catch (err) {
             setError(
                 err.response?.data?.message ||
@@ -47,17 +87,15 @@ export default function Login() {
     const handleForgotPassword = async (e) => {
         e.preventDefault();
         setResetMsg('');
+        setResetLoading(true);
 
         try {
-            const res = await axios.post(
-                'http://localhost:5000/api/auth/forgot-password',
-                {
-                    email: resetEmail,
-                    newPassword,
-                }
-            );
+            const res = await apiClient.post('/api/auth/forgot-password', {
+                email: resetEmail.trim(),
+                newPassword,
+            });
 
-            setResetMsg(res.data.message);
+            setResetMsg(res.data?.message || 'Password berhasil diperbarui.');
 
             setTimeout(() => {
                 setShowForgot(false);
@@ -69,6 +107,8 @@ export default function Login() {
             setResetMsg(
                 err.response?.data?.message || 'Gagal mereset password.'
             );
+        } finally {
+            setResetLoading(false);
         }
     };
 
@@ -322,9 +362,10 @@ export default function Login() {
 
                                 <button
                                     type="submit"
-                                    className="px-5 py-2.5 text-sm font-semibold bg-blue-500 hover:bg-blue-400 text-white rounded-lg transition cursor-pointer"
+                                    disabled={resetLoading}
+                                    className="px-5 py-2.5 text-sm font-semibold bg-blue-500 hover:bg-blue-400 disabled:opacity-60 text-white rounded-lg transition cursor-pointer"
                                 >
-                                    Simpan Password
+                                    {resetLoading ? 'Menyimpan...' : 'Simpan Password'}
                                 </button>
                             </div>
                         </form>

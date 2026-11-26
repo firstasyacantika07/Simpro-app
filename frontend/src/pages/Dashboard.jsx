@@ -1,6 +1,5 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
 import {
     Building2,
     Package,
@@ -27,8 +26,15 @@ import SitesSection from '../components/SitesSection';
 import MosSection from '../components/MosSection';
 import ProgressSection from '../components/ProgressSection';
 import Sidebar from '../components/Sidebar';
+import apiClient, {
+    getAccessToken,
+    getStoredUser,
+    setAuthSession,
+    clearAuthSession,
+    refreshAccessToken,
+    logoutRequest,
+} from '../api/axiosClient';
 
-const API_BASE = 'http://localhost:5000';
 const PROJECT_HERO_IMAGE = '/foto.jpg';
 const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#84cc16', '#8b5cf6', '#06b6d4'];
 const READ_NOTIFICATIONS_KEY = 'simpro_read_notification_ids';
@@ -38,16 +44,6 @@ const DEFAULT_WEATHER_COORDS = {
     latitude: -7.5718,
     longitude: 111.6531,
     locationName: 'Kab. Madiun',
-};
-
-const parseStoredUser = (rawUser) => {
-    if (!rawUser) return null;
-    try {
-        const parsed = JSON.parse(rawUser);
-        return parsed && typeof parsed === 'object' ? parsed : null;
-    } catch {
-        return null;
-    }
 };
 
 const extractArray = (payload, keys = ['data']) => {
@@ -570,27 +566,23 @@ function PengaturanView({ user, setUser }) {
         setSaving(true);
         setFeedback(null);
 
-        const token = localStorage.getItem('token');
         try {
             const payload = { nama: nama.trim(), email: email.trim() };
             if (password.trim()) {
                 payload.password = password;
             }
 
-            const res = await axios.put(`${API_BASE}/api/auth/profile`, payload, {
-                headers: { Authorization: `Bearer ${token}` },
-            });
+            const res = await apiClient.put('/api/auth/profile', payload);
 
-            if (res.data?.token) {
-                localStorage.setItem('token', res.data.token);
-            }
+            const nextAccessToken = res.data?.accessToken || res.data?.token || getAccessToken();
             const nextUser = {
                 ...user,
                 ...(res.data?.user || {}),
                 nama: res.data?.user?.nama || nama.trim(),
                 email: res.data?.user?.email || email.trim(),
             };
-            localStorage.setItem('user', JSON.stringify(nextUser));
+
+            setAuthSession({ accessToken: nextAccessToken, user: nextUser });
             setUser(nextUser);
             setPassword('');
             setFeedback({
@@ -613,7 +605,7 @@ function PengaturanView({ user, setUser }) {
                 <h2 className="text-xl font-bold text-white">Pengaturan Akun</h2>
                 <p className="text-sm text-slate-400">
                     Perbarui informasi akun atau password Anda. Role saat ini:{' '}
-                    <span className="text-blue-400 font-semibold">{user?.posisi}</span>.
+                    <span className="text-blue-400 font-semibold">{user?.posisi || user?.role}</span>.
                 </p>
             </div>
 
@@ -627,7 +619,7 @@ function PengaturanView({ user, setUser }) {
                     </div>
                     <div>
                         <div className="text-sm font-semibold text-white">Informasi Profil</div>
-                        <div className="text-xs text-slate-400">Peran: {user?.posisi}</div>
+                        <div className="text-xs text-slate-400">Peran: {user?.posisi || user?.role}</div>
                     </div>
                 </div>
 
@@ -698,6 +690,7 @@ function PengaturanView({ user, setUser }) {
 
 export default function Dashboard() {
     const navigate = useNavigate();
+    const dateInputRef = useRef(null);
     const [user, setUser] = useState(null);
     const [activeMenu, setActiveMenu] = useState('overview');
     const [proyekList, setProyekList] = useState([]);
@@ -728,8 +721,7 @@ export default function Dashboard() {
     });
 
     const clearSessionAndRedirect = useCallback(() => {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
+        clearAuthSession();
         setUser(null);
         navigate('/login', { replace: true });
     }, [navigate]);
@@ -811,25 +803,14 @@ export default function Dashboard() {
         return () => clearInterval(timer);
     }, [user, fetchRealWeather]);
 
-    const loadDashboardData = useCallback(async (token) => {
+    const loadDashboardData = useCallback(async () => {
         setLoadingData(true);
-        const headers = { Authorization: `Bearer ${token}` };
 
         const [resProyek, resMos, resProgress] = await Promise.allSettled([
-            axios.get(`${API_BASE}/api/proyek`, { headers }),
-            axios.get(`${API_BASE}/api/fitur/mos`, { headers }),
-            axios.get(`${API_BASE}/api/fitur/progress`, { headers }),
+            apiClient.get('/api/proyek'),
+            apiClient.get('/api/fitur/mos'),
+            apiClient.get('/api/fitur/progress'),
         ]);
-
-        const isUnauthorized = [resProyek, resMos, resProgress].some(
-            (r) => r.status === 'rejected' && r.reason?.response?.status === 401
-        );
-
-        if (isUnauthorized) {
-            setLoadingData(false);
-            clearSessionAndRedirect();
-            return;
-        }
 
         if (resProyek.status === 'fulfilled') {
             setProyekList(extractArray(resProyek.value.data, ['data', 'proyek']));
@@ -850,35 +831,62 @@ export default function Dashboard() {
         }
 
         setLoadingData(false);
-    }, [clearSessionAndRedirect]);
+    }, []);
 
     useEffect(() => {
-        const token = localStorage.getItem('token');
-        const parsedUser = parseStoredUser(localStorage.getItem('user'));
+        let active = true;
 
-        if (!token || !parsedUser) {
-            clearSessionAndRedirect();
-            return;
+        async function initSession() {
+            const token = getAccessToken();
+            const storedUser = getStoredUser();
+
+            if (token && storedUser) {
+                if (active) {
+                    setUser(storedUser);
+                    loadDashboardData();
+                }
+                return;
+            }
+
+            try {
+                const refreshed = await refreshAccessToken();
+                if (active && refreshed?.user) {
+                    setUser(refreshed.user);
+                    loadDashboardData();
+                }
+            } catch {
+                if (active) {
+                    clearSessionAndRedirect();
+                }
+            }
         }
 
-        setUser(parsedUser);
-        loadDashboardData(token);
+        initSession();
+
+        return () => {
+            active = false;
+        };
     }, [clearSessionAndRedirect, loadDashboardData]);
 
     const handleRefresh = useCallback(() => {
-        const token = localStorage.getItem('token');
-        const parsedUser = parseStoredUser(localStorage.getItem('user'));
-        if (!token || !parsedUser) {
-            clearSessionAndRedirect();
-            return;
-        }
-        loadDashboardData(token);
+        loadDashboardData();
         fetchRealWeather(
             DEFAULT_WEATHER_COORDS.latitude,
             DEFAULT_WEATHER_COORDS.longitude,
             DEFAULT_WEATHER_COORDS.locationName
         );
-    }, [clearSessionAndRedirect, loadDashboardData, fetchRealWeather]);
+    }, [loadDashboardData, fetchRealWeather]);
+
+    const handleOpenCalendarPicker = useCallback(() => {
+        const el = dateInputRef.current;
+        if (!el) return;
+        if (typeof el.showPicker === 'function') {
+            el.showPicker();
+        } else {
+            el.focus();
+            el.click();
+        }
+    }, []);
 
     const markNotificationsAsRead = useCallback((idsToMark) => {
         if (!Array.isArray(idsToMark) || idsToMark.length === 0) return;
@@ -909,8 +917,10 @@ export default function Dashboard() {
         setMobileNavOpen(false);
     }, []);
 
-    const handleLogout = () => {
-        clearSessionAndRedirect();
+    const handleLogout = async () => {
+        await logoutRequest();
+        setUser(null);
+        navigate('/login', { replace: true });
     };
 
     const progressByProyek = useMemo(() => {
@@ -1132,6 +1142,7 @@ export default function Dashboard() {
     }, [recentActivities, markNotificationsAsRead, handleNavigate]);
 
     const getHeaderInfo = () => {
+        const roleLabel = user?.posisi || user?.role || '';
         switch (activeMenu) {
             case 'sites':
                 return {
@@ -1161,12 +1172,12 @@ export default function Dashboard() {
             case 'pengaturan':
                 return {
                     title: 'Pengaturan Akun',
-                    subtitle: `Kelola profil dan hak akses peran ${user?.posisi || 'Tim SIMPRO'}.`,
+                    subtitle: `Kelola profil dan hak akses peran ${roleLabel || 'Tim SIMPRO'}.`,
                 };
             default:
                 return {
                     title: 'Dashboard',
-                    subtitle: `Selamat datang, ${user?.nama || 'Pengguna'} · ${user?.posisi || ''}`,
+                    subtitle: `Selamat datang, ${user?.nama || 'Pengguna'} · ${roleLabel}`,
                 };
         }
     };
@@ -1219,51 +1230,64 @@ export default function Dashboard() {
                     <div className="flex flex-wrap items-center gap-2.5 ml-auto">
                         {activeMenu === 'overview' && (
                             <>
-                                {/* Filter Kalender */}
-                                <label
-                                    className="relative flex items-center gap-2 bg-[#11192b] border border-slate-800 hover:border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-200 cursor-pointer"
-                                    title="Pilih tanggal lewat kalender"
-                                >
-                                    <Calendar className="w-4 h-4 text-blue-400 shrink-0" />
+                                {/* Satu Filter Tanggal Terpadu: Ikon Kalender + Semua Tanggal */}
+                                <div className="relative flex items-center gap-2 bg-[#11192b] border border-slate-800 hover:border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-200">
+                                    <button
+                                        type="button"
+                                        onClick={handleOpenCalendarPicker}
+                                        className="flex items-center justify-center text-blue-400 hover:text-blue-300 transition cursor-pointer shrink-0"
+                                        title="Buka kalender"
+                                        aria-label="Buka kalender"
+                                    >
+                                        <Calendar className="w-4 h-4" />
+                                    </button>
+
                                     <input
+                                        ref={dateInputRef}
                                         type="date"
                                         value={selectedDate}
                                         onChange={(e) => setSelectedDate(e.target.value)}
-                                        className="bg-transparent text-slate-100 font-medium outline-none cursor-pointer [color-scheme:dark]"
-                                        aria-label="Filter kalender tanggal"
+                                        className="sr-only"
+                                        tabIndex={-1}
+                                        aria-hidden="true"
                                     />
-                                </label>
 
-                                {/* Dropdown Tanggal Tersedia */}
-                                <label className="relative flex items-center gap-2 bg-[#11192b] border border-slate-800 hover:border-slate-700 rounded-xl px-3.5 py-2 text-xs sm:text-sm text-slate-200 cursor-pointer">
-                                    <select
-                                        value={selectedDate}
-                                        onChange={(e) => setSelectedDate(e.target.value)}
-                                        className="bg-transparent text-slate-100 font-medium outline-none pr-4 appearance-none cursor-pointer"
-                                    >
-                                        <option value="" className="bg-[#11192b]">
-                                            Semua Tanggal
-                                        </option>
-                                        {availableDates.map((tgl) => (
-                                            <option key={tgl} value={tgl} className="bg-[#11192b]">
-                                                {tgl}
+                                    <div className="relative flex items-center">
+                                        <select
+                                            value={selectedDate}
+                                            onChange={(e) => setSelectedDate(e.target.value)}
+                                            className="bg-transparent text-slate-100 font-medium outline-none pr-5 appearance-none cursor-pointer"
+                                            aria-label="Filter tanggal"
+                                        >
+                                            <option value="" className="bg-[#11192b]">
+                                                Semua Tanggal
                                             </option>
-                                        ))}
-                                    </select>
-                                    <ChevronDown className="w-4 h-4 text-slate-400 pointer-events-none" />
-                                </label>
+                                            {selectedDate && !availableDates.includes(selectedDate) && (
+                                                <option value={selectedDate} className="bg-[#11192b]">
+                                                    {selectedDate}
+                                                </option>
+                                            )}
+                                            {availableDates.map((tgl) => (
+                                                <option key={tgl} value={tgl} className="bg-[#11192b]">
+                                                    {tgl}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <ChevronDown className="w-4 h-4 text-slate-400 pointer-events-none absolute right-0" />
+                                    </div>
 
-                                {selectedDate && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setSelectedDate('')}
-                                        className="h-10 px-2.5 rounded-xl bg-[#11192b] border border-slate-800 hover:border-rose-500/50 hover:text-rose-300 flex items-center gap-1 text-xs text-slate-400 transition cursor-pointer"
-                                        title="Reset filter tanggal"
-                                        aria-label="Reset filter tanggal"
-                                    >
-                                        <X className="w-3.5 h-3.5" />
-                                    </button>
-                                )}
+                                    {selectedDate && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setSelectedDate('')}
+                                            className="ml-0.5 p-0.5 rounded-md text-slate-400 hover:text-rose-300 hover:bg-slate-800/80 transition cursor-pointer"
+                                            title="Reset filter tanggal"
+                                            aria-label="Reset filter tanggal"
+                                        >
+                                            <X className="w-3.5 h-3.5" />
+                                        </button>
+                                    )}
+                                </div>
 
                                 <button
                                     type="button"

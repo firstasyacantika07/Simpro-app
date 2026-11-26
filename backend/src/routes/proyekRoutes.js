@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const nodemailer = require('nodemailer');
 const db = require('../config/db');
-const { verifyToken } = require('../middleware/authMiddleware');
+const { authenticateToken } = require('../middleware/authMiddleware');
 
 const isProjectManager = (posisi = '') => {
     const normalized = String(posisi).trim().toLowerCase();
@@ -37,9 +37,9 @@ const createMailTransporter = () => {
 };
 
 // Ambil data proyek sesuai hak akses
-router.get('/', verifyToken, async (req, res) => {
+router.get('/', authenticateToken, async (req, res) => {
     try {
-        if (isProjectManager(req.user?.posisi)) {
+        if (isProjectManager(req.user?.posisi || req.user?.role)) {
             const [rows] = await db.query('SELECT * FROM proyek ORDER BY created_at DESC');
             return res.json(rows);
         }
@@ -60,7 +60,7 @@ router.get('/', verifyToken, async (req, res) => {
 });
 
 // Ambil daftar bangunan pada suatu proyek 
-router.get('/:id/bangunan', verifyToken, async (req, res) => {
+router.get('/:id/bangunan', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
         const [rows] = await db.query(
@@ -92,8 +92,8 @@ router.get('/:id/bangunan', verifyToken, async (req, res) => {
 });
 
 // Tambah bangunan baru pada suatu proyek (Khusus PM)
-router.post('/:id/bangunan', verifyToken, async (req, res) => {
-    if (!isProjectManager(req.user?.posisi)) {
+router.post('/:id/bangunan', authenticateToken, async (req, res) => {
+    if (!isProjectManager(req.user?.posisi || req.user?.role)) {
         return res.status(403).json({
             message: 'Hanya Project Manager / PM yang berwenang menambahkan bangunan.',
         });
@@ -142,8 +142,8 @@ router.post('/:id/bangunan', verifyToken, async (req, res) => {
 });
 
 // Hapus bangunan pada suatu proyek (Khusus PM)
-router.delete('/:id/bangunan/:bangunanId', verifyToken, async (req, res) => {
-    if (!isProjectManager(req.user?.posisi)) {
+router.delete('/:id/bangunan/:bangunanId', authenticateToken, async (req, res) => {
+    if (!isProjectManager(req.user?.posisi || req.user?.role)) {
         return res.status(403).json({
             message: 'Hanya Project Manager / PM yang berwenang menghapus bangunan.',
         });
@@ -165,7 +165,7 @@ router.delete('/:id/bangunan/:bangunanId', verifyToken, async (req, res) => {
 });
 
 // Ambil riwayat progress_harian per proyek
-router.get('/:id/progress-harian', verifyToken, async (req, res) => {
+router.get('/:id/progress-harian', authenticateToken, async (req, res) => {
     const { id } = req.params;
     const { bangunan_id } = req.query;
 
@@ -208,7 +208,7 @@ router.get('/:id/progress-harian', verifyToken, async (req, res) => {
 });
 
 // Ambil daftar anggota / undangan pada suatu proyek
-router.get('/:id/anggota', verifyToken, async (req, res) => {
+router.get('/:id/anggota', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
         const [rows] = await db.query(
@@ -228,8 +228,8 @@ router.get('/:id/anggota', verifyToken, async (req, res) => {
 });
 
 // Invite anggota tim ke site proyek berdasarkan email (Khusus PM)
-router.post('/:id/invite', verifyToken, async (req, res) => {
-    if (!isProjectManager(req.user?.posisi)) {
+router.post('/:id/invite', authenticateToken, async (req, res) => {
+    if (!isProjectManager(req.user?.posisi || req.user?.role)) {
         return res.status(403).json({
             message: 'Hanya Project Manager / PM yang berwenang mengundang tim ke proyek.',
         });
@@ -340,8 +340,8 @@ router.post('/:id/invite', verifyToken, async (req, res) => {
 });
 
 // Tambah proyek baru (Khusus PM)
-router.post('/', verifyToken, async (req, res) => {
-    if (!isProjectManager(req.user?.posisi)) {
+router.post('/', authenticateToken, async (req, res) => {
+    if (!isProjectManager(req.user?.posisi || req.user?.role)) {
         return res.status(403).json({
             message: 'Hanya Project Manager / PM yang berwenang menambahkan proyek.',
         });
@@ -410,8 +410,8 @@ router.post('/', verifyToken, async (req, res) => {
 });
 
 // Update proyek berdasarkan ID (Khusus PM)
-router.put('/:id', verifyToken, async (req, res) => {
-    if (!isProjectManager(req.user?.posisi)) {
+router.put('/:id', authenticateToken, async (req, res) => {
+    if (!isProjectManager(req.user?.posisi || req.user?.role)) {
         return res.status(403).json({
             message: 'Hanya Project Manager / PM yang berwenang memperbarui proyek.',
         });
@@ -485,8 +485,8 @@ router.put('/:id', verifyToken, async (req, res) => {
 });
 
 // Hapus proyek berdasarkan ID (Khusus PM)
-router.delete('/:id', verifyToken, async (req, res) => {
-    if (!isProjectManager(req.user?.posisi)) {
+router.delete('/:id', authenticateToken, async (req, res) => {
+    if (!isProjectManager(req.user?.posisi || req.user?.role)) {
         return res.status(403).json({
             message: 'Hanya Project Manager / PM yang berwenang menghapus proyek.',
         });
@@ -504,5 +504,6 @@ router.delete('/:id', verifyToken, async (req, res) => {
         res.status(500).json({ message: 'Gagal menghapus proyek', error: error.message });
     }
 });
+
 
 module.exports = router;

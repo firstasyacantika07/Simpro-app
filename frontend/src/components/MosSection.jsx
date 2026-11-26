@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import axios from 'axios';
 import {
     Plus,
     Pencil,
@@ -10,10 +9,14 @@ import {
     Boxes,
     X,
     RotateCcw,
+    FileSpreadsheet,
+    FileText,
+    Loader2,
+    CheckCircle2,
+    AlertCircle,
 } from 'lucide-react';
 import { canEditMOS } from '../utils/rbac';
-
-const API_BASE = 'http://localhost:5000/api';
+import apiClient, { getAccessToken } from '../api/axiosClient';
 
 const INITIAL_FORM = {
     proyek_id: '',
@@ -56,7 +59,7 @@ const normalizeDateKey = (rawDate) => {
 
 const getMonthKey = (dateKey) => {
     if (!dateKey || dateKey.length < 7) return '';
-    return dateKey.slice(0, 7); // YYYY-MM
+    return dateKey.slice(0, 7);
 };
 
 const formatTanggalIndo = (dateKey) => {
@@ -113,16 +116,18 @@ export default function MosSection({
     const [editId, setEditId] = useState(null);
     const [selectedMonthKey, setSelectedMonthKey] = useState('');
     const [selectedMaterialKey, setSelectedMaterialKey] = useState('');
+    const [exportingFormat, setExportingFormat] = useState(null); // 'excel' | 'pdf' | null
+    const [exportNotice, setExportNotice] = useState(null); // { type: 'success' | 'error', message: string }
     const [form, setForm] = useState({
         ...INITIAL_FORM,
         proyek_id: selectedProyekId ? String(selectedProyekId) : '',
     });
 
     const hasWriteAccess = canEditMOS(user?.posisi);
-    const token = localStorage.getItem('token');
+    const activeToken = getAccessToken() || localStorage.getItem('token');
     const authHeader = useMemo(
-        () => ({ headers: { Authorization: `Bearer ${token}` } }),
-        [token]
+        () => (activeToken ? { headers: { Authorization: `Bearer ${activeToken}` } } : {}),
+        [activeToken]
     );
 
     const activeProyekId = selectedProyekId
@@ -132,7 +137,7 @@ export default function MosSection({
             : '';
 
     const fetchData = useCallback(async () => {
-        if (!token) {
+        if (!activeToken) {
             setProyekError('Token autentikasi tidak ditemukan. Silakan login ulang.');
             return;
         }
@@ -141,12 +146,12 @@ export default function MosSection({
         setProyekError('');
 
         const mosUrl = activeProyekId
-            ? `${API_BASE}/fitur/mos?proyek_id=${encodeURIComponent(activeProyekId)}`
-            : `${API_BASE}/fitur/mos`;
+            ? `/api/fitur/mos?proyek_id=${encodeURIComponent(activeProyekId)}`
+            : '/api/fitur/mos';
 
         const [mosResult, proyekResult] = await Promise.allSettled([
-            axios.get(mosUrl, authHeader),
-            axios.get(`${API_BASE}/proyek`, authHeader),
+            apiClient.get(mosUrl, authHeader),
+            apiClient.get('/api/proyek', authHeader),
         ]);
 
         if (mosResult.status === 'fulfilled') {
@@ -172,7 +177,7 @@ export default function MosSection({
         }));
 
         setLoadingProyek(false);
-    }, [token, authHeader, activeProyekId]);
+    }, [activeToken, authHeader, activeProyekId]);
 
     useEffect(() => {
         fetchData();
@@ -203,7 +208,6 @@ export default function MosSection({
         );
     }, [mosList, activeProyekId]);
 
-    // Keseluruhan total tiap material pada site terpilih
     const materialTotalsList = useMemo(() => {
         if (siteMosList.length === 0) return [];
 
@@ -251,7 +255,6 @@ export default function MosSection({
             .sort((a, b) => a.nama_material.localeCompare(b.nama_material, 'id'));
     }, [siteMosList]);
 
-    // Rekap per bulan pada site terpilih
     const monthlySummaryList = useMemo(() => {
         if (siteMosList.length === 0) return [];
 
@@ -317,6 +320,78 @@ export default function MosSection({
         });
     }, [siteMosList, activeProyekId, selectedMonthKey, selectedMaterialKey]);
 
+    const handleDownloadExport = async (format) => {
+        if (!activeProyekId || exportingFormat) return;
+        setExportingFormat(format);
+        setExportNotice(null);
+
+        try {
+            const params = new URLSearchParams();
+            params.set('proyek_id', activeProyekId);
+            if (selectedMonthKey) params.set('month', selectedMonthKey);
+            if (selectedMaterialKey) params.set('material_key', selectedMaterialKey);
+
+            const endpoint =
+                format === 'excel'
+                    ? `/api/fitur/mos/export/excel?${params.toString()}`
+                    : `/api/fitur/mos/export/pdf?${params.toString()}`;
+
+            const response = await apiClient.get(endpoint, {
+                ...authHeader,
+                responseType: 'blob',
+            });
+
+            const todayStr = new Date().toISOString().split('T')[0];
+            const ext = format === 'excel' ? 'xlsx' : 'pdf';
+            const fallbackName = `MOS_Simpro_${todayStr}.${ext}`;
+
+            const disposition = response.headers?.['content-disposition'] || '';
+            const match = disposition.match(/filename="?([^";]+)"?/i);
+            const filename = match?.[1] || fallbackName;
+
+            const mimeType =
+                format === 'excel'
+                    ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    : 'application/pdf';
+
+            const blob = new Blob([response.data], {
+                type: response.data?.type || mimeType,
+            });
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', filename);
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+
+            setExportNotice({
+                type: 'success',
+                message: `File ${filename} berhasil diunduh.`,
+            });
+        } catch (err) {
+            let errMsg = `Gagal mengunduh laporan ${format.toUpperCase()}.`;
+            if (err?.response?.data instanceof Blob) {
+                try {
+                    const text = await err.response.data.text();
+                    const parsed = JSON.parse(text);
+                    if (parsed?.message) errMsg = parsed.message;
+                } catch {
+                    // abaikan jika bukan JSON
+                }
+            } else if (err?.response?.data?.message) {
+                errMsg = err.response.data.message;
+            }
+            setExportNotice({
+                type: 'error',
+                message: errMsg,
+            });
+        } finally {
+            setExportingFormat(null);
+        }
+    };
+
     const resetForm = () => {
         setEditId(null);
         setForm({
@@ -332,6 +407,7 @@ export default function MosSection({
         setEditId(null);
         setSelectedMonthKey('');
         setSelectedMaterialKey('');
+        setExportNotice(null);
         setForm({
             ...INITIAL_FORM,
             proyek_id: val,
@@ -367,9 +443,9 @@ export default function MosSection({
 
         try {
             if (editId) {
-                await axios.put(`${API_BASE}/fitur/mos/${editId}`, payload, authHeader);
+                await apiClient.put(`/api/fitur/mos/${editId}`, payload, authHeader);
             } else {
-                await axios.post(`${API_BASE}/fitur/mos`, payload, authHeader);
+                await apiClient.post('/api/fitur/mos', payload, authHeader);
             }
             setShowForm(false);
             resetForm();
@@ -401,7 +477,7 @@ export default function MosSection({
     const handleDelete = async (id) => {
         if (!confirm('Hapus data material ini?')) return;
         try {
-            await axios.delete(`${API_BASE}/fitur/mos/${id}`, authHeader);
+            await apiClient.delete(`/api/fitur/mos/${id}`, authHeader);
             fetchData();
         } catch (err) {
             alert(err.response?.data?.message || 'Gagal menghapus data MOS');
@@ -449,37 +525,95 @@ export default function MosSection({
                     </div>
 
                     {isSiteSelected && (
-                        hasWriteAccess ? (
+                        <>
                             <button
                                 type="button"
-                                onClick={() => {
-                                    if (showForm) {
-                                        setShowForm(false);
-                                        resetForm();
-                                    } else {
-                                        setEditId(null);
-                                        setForm({
-                                            ...INITIAL_FORM,
-                                            proyek_id: activeProyekId,
-                                            tanggal_masuk: new Date().toISOString().split('T')[0],
-                                        });
-                                        setShowForm(true);
-                                    }
-                                }}
-                                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-xl transition cursor-pointer"
+                                disabled={Boolean(exportingFormat)}
+                                onClick={() => handleDownloadExport('excel')}
+                                className="inline-flex items-center gap-2 bg-emerald-600/90 hover:bg-emerald-500 disabled:opacity-60 text-white text-sm font-medium px-3.5 py-2.5 rounded-xl transition cursor-pointer"
+                                title="Download Excel (.xlsx)"
                             >
-                                <Plus size={18} />
-                                <span>{showForm ? 'Tutup Form' : 'Tambah Data MOS'}</span>
+                                {exportingFormat === 'excel' ? (
+                                    <Loader2 size={16} className="animate-spin" />
+                                ) : (
+                                    <FileSpreadsheet size={16} />
+                                )}
+                                <span>{exportingFormat === 'excel' ? 'Exporting...' : 'Download Excel'}</span>
                             </button>
-                        ) : (
-                            <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-[#131c2e] border border-slate-700/80 text-slate-300 px-3.5 py-2 rounded-xl">
-                                <Lock size={14} className="text-slate-400" />
-                                Mode Baca (Hanya Logistik & Admin Proyek yang dapat mengubah)
-                            </span>
-                        )
+
+                            <button
+                                type="button"
+                                disabled={Boolean(exportingFormat)}
+                                onClick={() => handleDownloadExport('pdf')}
+                                className="inline-flex items-center gap-2 bg-[#131c2e] hover:bg-slate-800 border border-slate-700/80 disabled:opacity-60 text-slate-100 text-sm font-medium px-3.5 py-2.5 rounded-xl transition cursor-pointer"
+                                title="Download PDF (.pdf)"
+                            >
+                                {exportingFormat === 'pdf' ? (
+                                    <Loader2 size={16} className="animate-spin text-rose-400" />
+                                ) : (
+                                    <FileText size={16} className="text-rose-400" />
+                                )}
+                                <span>{exportingFormat === 'pdf' ? 'Exporting...' : 'Download PDF'}</span>
+                            </button>
+
+                            {hasWriteAccess ? (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (showForm) {
+                                            setShowForm(false);
+                                            resetForm();
+                                        } else {
+                                            setEditId(null);
+                                            setForm({
+                                                ...INITIAL_FORM,
+                                                proyek_id: activeProyekId,
+                                                tanggal_masuk: new Date().toISOString().split('T')[0],
+                                            });
+                                            setShowForm(true);
+                                        }
+                                    }}
+                                    className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-xl transition cursor-pointer"
+                                >
+                                    <Plus size={18} />
+                                    <span>{showForm ? 'Tutup Form' : 'Tambah Data MOS'}</span>
+                                </button>
+                            ) : (
+                                <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-[#131c2e] border border-slate-700/80 text-slate-300 px-3.5 py-2 rounded-xl">
+                                    <Lock size={14} className="text-slate-400" />
+                                    Mode Baca (Hanya Logistik & Admin Proyek yang dapat mengubah)
+                                </span>
+                            )}
+                        </>
                     )}
                 </div>
             </div>
+
+            {exportNotice && (
+                <div
+                    className={`flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-sm border ${exportNotice.type === 'success'
+                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                            : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                        }`}
+                >
+                    <div className="flex items-center gap-2">
+                        {exportNotice.type === 'success' ? (
+                            <CheckCircle2 size={16} className="shrink-0" />
+                        ) : (
+                            <AlertCircle size={16} className="shrink-0" />
+                        )}
+                        <span>{exportNotice.message}</span>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setExportNotice(null)}
+                        className="text-current/80 hover:text-white cursor-pointer"
+                        aria-label="Tutup notifikasi"
+                    >
+                        <X size={15} />
+                    </button>
+                </div>
+            )}
 
             {proyekError && (
                 <div className="bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm px-4 py-3 rounded-xl">
@@ -493,7 +627,7 @@ export default function MosSection({
                         Silakan pilih site terlebih dahulu
                     </p>
                     <p className="text-xs text-slate-400">
-                        Total material, rekap per bulan, dan form data MOS hanya ditampilkan setelah Anda memilih site yang aktif.
+                        Total material, rekap per bulan, tombol export, dan form data MOS hanya ditampilkan setelah Anda memilih site yang aktif.
                     </p>
                 </div>
             ) : (

@@ -1,21 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
-const { verifyToken } = require('../middleware/authMiddleware');
+const { authenticateToken, authorizeRoles } = require('../middleware/authMiddleware');
 
-const canEditMOS = (posisi = '') => {
-    const normalized = String(posisi).trim().toLowerCase();
-    return (
-        normalized.includes('logistik') ||
-        normalized.includes('admin proyek') ||
-        normalized.includes('project manager') ||
-        normalized.includes('proyek manager') ||
-        normalized === 'pm'
-    );
-};
+const MOS_WRITE_ROLES = [
+    'Logistik',
+    'Admin Proyek',
+    'PM',
+    'Project Manager',
+    'Proyek Manager',
+];
 
 // GET /mos
-router.get('/mos', verifyToken, async (req, res) => {
+router.get('/mos', authenticateToken, async (req, res) => {
     const { proyek_id } = req.query;
     try {
         const params = [];
@@ -33,109 +30,114 @@ router.get('/mos', verifyToken, async (req, res) => {
 });
 
 // POST /mos
-router.post('/mos', verifyToken, async (req, res) => {
-    if (!canEditMOS(req.user?.posisi)) {
-        return res.status(403).json({ message: 'Hanya Logistik atau PM/Admin Proyek yang berwenang.' });
-    }
+router.post(
+    '/mos',
+    authenticateToken,
+    authorizeRoles(...MOS_WRITE_ROLES),
+    async (req, res) => {
+        const {
+            proyek_id,
+            kode_material,
+            nama_material,
+            satuan,
+            jumlah_masuk,
+            jumlah_terpakai,
+            tanggal_update,
+        } = req.body;
 
-    const {
-        proyek_id,
-        kode_material,
-        nama_material,
-        satuan,
-        jumlah_masuk,
-        jumlah_terpakai,
-        tanggal_update,
-    } = req.body;
+        if (!proyek_id || !kode_material || !nama_material) {
+            return res.status(400).json({
+                message: 'Proyek, kode material, dan nama material wajib diisi.',
+            });
+        }
 
-    if (!proyek_id || !kode_material || !nama_material) {
-        return res.status(400).json({ message: 'Proyek, kode material, dan nama material wajib diisi.' });
+        try {
+            const [result] = await db.query(
+                `INSERT INTO mos (proyek_id, kode_material, nama_material, satuan, jumlah_masuk, jumlah_terpakai, tanggal_update)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    Number(proyek_id),
+                    String(kode_material).trim(),
+                    String(nama_material).trim(),
+                    String(satuan || 'Unit').trim(),
+                    Number(jumlah_masuk) || 0,
+                    Number(jumlah_terpakai) || 0,
+                    tanggal_update || new Date().toISOString().split('T')[0],
+                ]
+            );
+            res.status(201).json({ id: result.insertId, message: 'Data MOS berhasil disimpan.' });
+        } catch (error) {
+            res.status(500).json({ message: 'Gagal menyimpan data MOS', error: error.message });
+        }
     }
-
-    try {
-        const [result] = await db.query(
-            `INSERT INTO mos (proyek_id, kode_material, nama_material, satuan, jumlah_masuk, jumlah_terpakai, tanggal_update)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [
-                Number(proyek_id),
-                String(kode_material).trim(),
-                String(nama_material).trim(),
-                String(satuan || 'Unit').trim(),
-                Number(jumlah_masuk) || 0,
-                Number(jumlah_terpakai) || 0,
-                tanggal_update || new Date().toISOString().split('T')[0],
-            ]
-        );
-        res.status(201).json({ id: result.insertId, message: 'Data MOS berhasil disimpan.' });
-    } catch (error) {
-        res.status(500).json({ message: 'Gagal menyimpan data MOS', error: error.message });
-    }
-});
+);
 
 // PUT /mos/:id
-router.put('/mos/:id', verifyToken, async (req, res) => {
-    if (!canEditMOS(req.user?.posisi)) {
-        return res.status(403).json({ message: 'Hanya Logistik atau PM/Admin Proyek yang berwenang.' });
-    }
+router.put(
+    '/mos/:id',
+    authenticateToken,
+    authorizeRoles(...MOS_WRITE_ROLES),
+    async (req, res) => {
+        const { id } = req.params;
+        const {
+            proyek_id,
+            kode_material,
+            nama_material,
+            satuan,
+            jumlah_masuk,
+            jumlah_terpakai,
+            tanggal_update,
+        } = req.body;
 
-    const { id } = req.params;
-    const {
-        proyek_id,
-        kode_material,
-        nama_material,
-        satuan,
-        jumlah_masuk,
-        jumlah_terpakai,
-        tanggal_update,
-    } = req.body;
-
-    try {
-        const [result] = await db.query(
-            `UPDATE mos
-             SET proyek_id = ?,
-                 kode_material = ?,
-                 nama_material = ?,
-                 satuan = ?,
-                 jumlah_masuk = ?,
-                 jumlah_terpakai = ?,
-                 tanggal_update = ?
-             WHERE id = ?`,
-            [
-                Number(proyek_id),
-                String(kode_material).trim(),
-                String(nama_material).trim(),
-                String(satuan || 'Unit').trim(),
-                Number(jumlah_masuk) || 0,
-                Number(jumlah_terpakai) || 0,
-                tanggal_update || new Date().toISOString().split('T')[0],
-                id,
-            ]
-        );
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ message: 'Data MOS tidak ditemukan.' });
+        try {
+            const [result] = await db.query(
+                `UPDATE mos
+                 SET proyek_id = ?,
+                     kode_material = ?,
+                     nama_material = ?,
+                     satuan = ?,
+                     jumlah_masuk = ?,
+                     jumlah_terpakai = ?,
+                     tanggal_update = ?
+                 WHERE id = ?`,
+                [
+                    Number(proyek_id),
+                    String(kode_material).trim(),
+                    String(nama_material).trim(),
+                    String(satuan || 'Unit').trim(),
+                    Number(jumlah_masuk) || 0,
+                    Number(jumlah_terpakai) || 0,
+                    tanggal_update || new Date().toISOString().split('T')[0],
+                    id,
+                ]
+            );
+            if (result.affectedRows === 0) {
+                return res.status(404).json({ message: 'Data MOS tidak ditemukan.' });
+            }
+            res.json({ message: 'Data MOS berhasil diperbarui.' });
+        } catch (error) {
+            res.status(500).json({ message: 'Gagal memperbarui data MOS', error: error.message });
         }
-        res.json({ message: 'Data MOS berhasil diperbarui.' });
-    } catch (error) {
-        res.status(500).json({ message: 'Gagal memperbarui data MOS', error: error.message });
     }
-});
+);
 
 // DELETE /mos/:id
-router.delete('/mos/:id', verifyToken, async (req, res) => {
-    if (!canEditMOS(req.user?.posisi)) {
-        return res.status(403).json({ message: 'Hanya Logistik atau PM/Admin Proyek yang berwenang.' });
-    }
-
-    const { id } = req.params;
-    try {
-        const [result] = await db.query('DELETE FROM mos WHERE id = ?', [id]);
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ message: 'Data MOS tidak ditemukan.' });
+router.delete(
+    '/mos/:id',
+    authenticateToken,
+    authorizeRoles(...MOS_WRITE_ROLES),
+    async (req, res) => {
+        const { id } = req.params;
+        try {
+            const [result] = await db.query('DELETE FROM mos WHERE id = ?', [id]);
+            if (result.affectedRows === 0) {
+                return res.status(404).json({ message: 'Data MOS tidak ditemukan.' });
+            }
+            res.json({ message: 'Data MOS berhasil dihapus.' });
+        } catch (error) {
+            res.status(500).json({ message: 'Gagal menghapus data MOS', error: error.message });
         }
-        res.json({ message: 'Data MOS berhasil dihapus.' });
-    } catch (error) {
-        res.status(500).json({ message: 'Gagal menghapus data MOS', error: error.message });
     }
-});
+);
 
 module.exports = router;

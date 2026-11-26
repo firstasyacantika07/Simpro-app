@@ -1,18 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
-const { verifyToken } = require('../middleware/authMiddleware');
+const { authenticateToken, authorizeRoles } = require('../middleware/authMiddleware');
 
-const canEditProgress = (posisi = '') => {
-    const normalized = String(posisi).trim().toLowerCase();
-    return (
-        normalized === 'qs' ||
-        normalized.includes('quantity surveyor') ||
-        normalized.includes('project manager') ||
-        normalized.includes('proyek manager') ||
-        normalized === 'pm'
-    );
-};
+const PROGRESS_WRITE_ROLES = [
+    'QS (Quantity Surveyor)',
+    'QS',
+    'PM',
+    'Project Manager',
+    'Proyek Manager',
+];
 
 async function syncBuildingAndProjectProgress(proyekId, bangunanId) {
     if (!proyekId) return;
@@ -85,7 +82,7 @@ async function resolveNamaBangunan(proyekId, bangunanId, rawNamaBangunan) {
 }
 
 // GET /progress (opsional ?proyek_id=... atau ?bangunan_id=...)
-router.get('/progress', verifyToken, async (req, res) => {
+router.get('/progress', authenticateToken, async (req, res) => {
     const { proyek_id, bangunan_id } = req.query;
 
     try {
@@ -138,277 +135,274 @@ router.get('/progress', verifyToken, async (req, res) => {
 });
 
 // POST /progress
-router.post('/progress', verifyToken, async (req, res) => {
-    if (!canEditProgress(req.user?.posisi)) {
-        return res.status(403).json({
-            message: 'Anda tidak memiliki hak akses untuk menginput laporan progress harian.',
-        });
-    }
-
-    const proyekId = req.body?.proyek_id ? Number(req.body.proyek_id) : null;
-    const bangunanId =
-        req.body?.bangunan_id !== undefined &&
-            req.body?.bangunan_id !== null &&
-            String(req.body.bangunan_id).trim() !== ''
-            ? Number(req.body.bangunan_id)
-            : null;
-
-    const pelaksana =
-        typeof req.body?.pelaksana === 'string' && req.body.pelaksana.trim() !== ''
-            ? req.body.pelaksana.trim()
-            : req.user?.nama || null;
-
-    const uraianPekerjaan =
-        typeof req.body?.uraian_pekerjaan === 'string' ? req.body.uraian_pekerjaan.trim() : '';
-    const tanggalLaporan =
-        typeof req.body?.tanggal_laporan === 'string' && req.body.tanggal_laporan.trim() !== ''
-            ? req.body.tanggal_laporan.trim()
-            : new Date().toISOString().split('T')[0];
-
-    const bobotRealisasi = Math.min(
-        Math.max(Number(req.body?.bobot_realisasi) || 0, 0),
-        100
-    );
-
-    const rawCatatan = req.body?.catatan ?? req.body?.kendala ?? null;
-    const catatan =
-        typeof rawCatatan === 'string' && rawCatatan.trim() !== '' ? rawCatatan.trim() : null;
-
-    const cuaca =
-        typeof req.body?.cuaca === 'string' && req.body.cuaca.trim() !== ''
-            ? req.body.cuaca.trim()
-            : null;
-
-    const dokumentasi =
-        typeof req.body?.dokumentasi === 'string' && req.body.dokumentasi.trim() !== ''
-            ? req.body.dokumentasi
-            : null;
-
-    if (!proyekId || !uraianPekerjaan) {
-        return res.status(400).json({
-            message: 'Proyek dan uraian pekerjaan wajib diisi.',
-        });
-    }
-
-    try {
-        const [proyekRows] = await db.query('SELECT id FROM proyek WHERE id = ?', [proyekId]);
-        if (proyekRows.length === 0) {
-            return res.status(404).json({ message: 'Proyek tidak ditemukan.' });
-        }
-
-        const namaBangunan = await resolveNamaBangunan(
-            proyekId,
-            bangunanId,
-            req.body?.nama_bangunan
-        );
-
-        const [result] = await db.query(
-            `INSERT INTO progress_harian (
-                proyek_id,
-                bangunan_id,
-                nama_bangunan,
-                pelaksana,
-                uraian_pekerjaan,
-                tanggal_laporan,
-                bobot_realisasi,
-                catatan,
-                cuaca,
-                dokumentasi,
-                created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                proyekId,
-                bangunanId,
-                namaBangunan,
-                pelaksana,
-                uraianPekerjaan,
-                tanggalLaporan,
-                bobotRealisasi,
-                catatan,
-                cuaca,
-                dokumentasi,
-                req.user?.id || null,
-            ]
-        );
-
-        await syncBuildingAndProjectProgress(proyekId, bangunanId);
-
-        res.status(201).json({
-            id: result.insertId,
-            proyek_id: proyekId,
-            bangunan_id: bangunanId,
-            nama_bangunan: namaBangunan,
-            pelaksana,
-            uraian_pekerjaan: uraianPekerjaan,
-            tanggal_laporan: tanggalLaporan,
-            bobot_realisasi: bobotRealisasi,
-            catatan,
-            kendala: catatan,
-            cuaca,
-            dokumentasi,
-            message: 'Laporan progress harian berhasil disimpan.',
-        });
-    } catch (error) {
-        res.status(500).json({
-            message: 'Gagal menyimpan laporan progress harian',
-            error: error.message,
-        });
-    }
-});
-
-// PUT /progress/:id
-router.put('/progress/:id', verifyToken, async (req, res) => {
-    if (!canEditProgress(req.user?.posisi)) {
-        return res.status(403).json({
-            message: 'Anda tidak memiliki hak akses untuk mengubah laporan progress harian.',
-        });
-    }
-
-    const { id } = req.params;
-
-    try {
-        const [existingRows] = await db.query(
-            'SELECT * FROM progress_harian WHERE id = ?',
-            [id]
-        );
-        if (existingRows.length === 0) {
-            return res.status(404).json({ message: 'Laporan progress tidak ditemukan.' });
-        }
-
-        const existing = existingRows[0];
-        const proyekId = req.body?.proyek_id ? Number(req.body.proyek_id) : existing.proyek_id;
+router.post(
+    '/progress',
+    authenticateToken,
+    authorizeRoles(...PROGRESS_WRITE_ROLES),
+    async (req, res) => {
+        const proyekId = req.body?.proyek_id ? Number(req.body.proyek_id) : null;
         const bangunanId =
-            req.body?.bangunan_id !== undefined
-                ? req.body.bangunan_id === null || String(req.body.bangunan_id).trim() === ''
-                    ? null
-                    : Number(req.body.bangunan_id)
-                : existing.bangunan_id;
-
-        const namaBangunan =
-            req.body?.nama_bangunan !== undefined || req.body?.bangunan_id !== undefined
-                ? await resolveNamaBangunan(proyekId, bangunanId, req.body?.nama_bangunan)
-                : existing.nama_bangunan;
+            req.body?.bangunan_id !== undefined &&
+                req.body?.bangunan_id !== null &&
+                String(req.body.bangunan_id).trim() !== ''
+                ? Number(req.body.bangunan_id)
+                : null;
 
         const pelaksana =
-            req.body?.pelaksana !== undefined
-                ? typeof req.body.pelaksana === 'string' && req.body.pelaksana.trim() !== ''
-                    ? req.body.pelaksana.trim()
-                    : null
-                : existing.pelaksana;
+            typeof req.body?.pelaksana === 'string' && req.body.pelaksana.trim() !== ''
+                ? req.body.pelaksana.trim()
+                : req.user?.nama || null;
 
         const uraianPekerjaan =
-            req.body?.uraian_pekerjaan !== undefined
-                ? String(req.body.uraian_pekerjaan).trim()
-                : existing.uraian_pekerjaan;
-
+            typeof req.body?.uraian_pekerjaan === 'string' ? req.body.uraian_pekerjaan.trim() : '';
         const tanggalLaporan =
-            req.body?.tanggal_laporan !== undefined && String(req.body.tanggal_laporan).trim() !== ''
-                ? String(req.body.tanggal_laporan).trim()
-                : existing.tanggal_laporan;
+            typeof req.body?.tanggal_laporan === 'string' && req.body.tanggal_laporan.trim() !== ''
+                ? req.body.tanggal_laporan.trim()
+                : new Date().toISOString().split('T')[0];
 
-        const bobotRealisasi =
-            req.body?.bobot_realisasi !== undefined
-                ? Math.min(Math.max(Number(req.body.bobot_realisasi) || 0, 0), 100)
-                : existing.bobot_realisasi;
+        const bobotRealisasi = Math.min(
+            Math.max(Number(req.body?.bobot_realisasi) || 0, 0),
+            100
+        );
 
-        const rawCatatan =
-            req.body?.catatan !== undefined ? req.body.catatan : req.body?.kendala;
+        const rawCatatan = req.body?.catatan ?? req.body?.kendala ?? null;
         const catatan =
-            rawCatatan !== undefined
-                ? typeof rawCatatan === 'string' && rawCatatan.trim() !== ''
-                    ? rawCatatan.trim()
-                    : null
-                : existing.catatan;
+            typeof rawCatatan === 'string' && rawCatatan.trim() !== '' ? rawCatatan.trim() : null;
 
         const cuaca =
-            req.body?.cuaca !== undefined
-                ? typeof req.body.cuaca === 'string' && req.body.cuaca.trim() !== ''
-                    ? req.body.cuaca.trim()
-                    : null
-                : existing.cuaca;
+            typeof req.body?.cuaca === 'string' && req.body.cuaca.trim() !== ''
+                ? req.body.cuaca.trim()
+                : null;
 
         const dokumentasi =
-            req.body?.dokumentasi !== undefined
-                ? typeof req.body.dokumentasi === 'string' && req.body.dokumentasi.trim() !== ''
-                    ? req.body.dokumentasi
-                    : null
-                : existing.dokumentasi;
+            typeof req.body?.dokumentasi === 'string' && req.body.dokumentasi.trim() !== ''
+                ? req.body.dokumentasi
+                : null;
 
-        if (!uraianPekerjaan) {
-            return res.status(400).json({ message: 'Uraian pekerjaan wajib diisi.' });
+        if (!proyekId || !uraianPekerjaan) {
+            return res.status(400).json({
+                message: 'Proyek dan uraian pekerjaan wajib diisi.',
+            });
         }
 
-        await db.query(
-            `UPDATE progress_harian
-             SET proyek_id = ?,
-                 bangunan_id = ?,
-                 nama_bangunan = ?,
-                 pelaksana = ?,
-                 uraian_pekerjaan = ?,
-                 tanggal_laporan = ?,
-                 bobot_realisasi = ?,
-                 catatan = ?,
-                 cuaca = ?,
-                 dokumentasi = ?
-             WHERE id = ?`,
-            [
+        try {
+            const [proyekRows] = await db.query('SELECT id FROM proyek WHERE id = ?', [proyekId]);
+            if (proyekRows.length === 0) {
+                return res.status(404).json({ message: 'Proyek tidak ditemukan.' });
+            }
+
+            const namaBangunan = await resolveNamaBangunan(
                 proyekId,
                 bangunanId,
-                namaBangunan,
+                req.body?.nama_bangunan
+            );
+
+            const [result] = await db.query(
+                `INSERT INTO progress_harian (
+                    proyek_id,
+                    bangunan_id,
+                    nama_bangunan,
+                    pelaksana,
+                    uraian_pekerjaan,
+                    tanggal_laporan,
+                    bobot_realisasi,
+                    catatan,
+                    cuaca,
+                    dokumentasi,
+                    created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    proyekId,
+                    bangunanId,
+                    namaBangunan,
+                    pelaksana,
+                    uraianPekerjaan,
+                    tanggalLaporan,
+                    bobotRealisasi,
+                    catatan,
+                    cuaca,
+                    dokumentasi,
+                    req.user?.id || null,
+                ]
+            );
+
+            await syncBuildingAndProjectProgress(proyekId, bangunanId);
+
+            res.status(201).json({
+                id: result.insertId,
+                proyek_id: proyekId,
+                bangunan_id: bangunanId,
+                nama_bangunan: namaBangunan,
                 pelaksana,
-                uraianPekerjaan,
-                tanggalLaporan,
-                bobotRealisasi,
+                uraian_pekerjaan: uraianPekerjaan,
+                tanggal_laporan: tanggalLaporan,
+                bobot_realisasi: bobotRealisasi,
                 catatan,
+                kendala: catatan,
                 cuaca,
                 dokumentasi,
-                id,
-            ]
-        );
-
-        await syncBuildingAndProjectProgress(existing.proyek_id, existing.bangunan_id);
-        await syncBuildingAndProjectProgress(proyekId, bangunanId);
-
-        res.json({ message: 'Laporan progress harian berhasil diperbarui.' });
-    } catch (error) {
-        res.status(500).json({
-            message: 'Gagal memperbarui laporan progress harian',
-            error: error.message,
-        });
+                message: 'Laporan progress harian berhasil disimpan.',
+            });
+        } catch (error) {
+            res.status(500).json({
+                message: 'Gagal menyimpan laporan progress harian',
+                error: error.message,
+            });
+        }
     }
-});
+);
+
+// PUT /progress/:id
+router.put(
+    '/progress/:id',
+    authenticateToken,
+    authorizeRoles(...PROGRESS_WRITE_ROLES),
+    async (req, res) => {
+        const { id } = req.params;
+
+        try {
+            const [existingRows] = await db.query(
+                'SELECT * FROM progress_harian WHERE id = ?',
+                [id]
+            );
+            if (existingRows.length === 0) {
+                return res.status(404).json({ message: 'Laporan progress tidak ditemukan.' });
+            }
+
+            const existing = existingRows[0];
+            const proyekId = req.body?.proyek_id ? Number(req.body.proyek_id) : existing.proyek_id;
+            const bangunanId =
+                req.body?.bangunan_id !== undefined
+                    ? req.body.bangunan_id === null || String(req.body.bangunan_id).trim() === ''
+                        ? null
+                        : Number(req.body.bangunan_id)
+                    : existing.bangunan_id;
+
+            const namaBangunan =
+                req.body?.nama_bangunan !== undefined || req.body?.bangunan_id !== undefined
+                    ? await resolveNamaBangunan(proyekId, bangunanId, req.body?.nama_bangunan)
+                    : existing.nama_bangunan;
+
+            const pelaksana =
+                req.body?.pelaksana !== undefined
+                    ? typeof req.body.pelaksana === 'string' && req.body.pelaksana.trim() !== ''
+                        ? req.body.pelaksana.trim()
+                        : null
+                    : existing.pelaksana;
+
+            const uraianPekerjaan =
+                req.body?.uraian_pekerjaan !== undefined
+                    ? String(req.body.uraian_pekerjaan).trim()
+                    : existing.uraian_pekerjaan;
+
+            const tanggalLaporan =
+                req.body?.tanggal_laporan !== undefined && String(req.body.tanggal_laporan).trim() !== ''
+                    ? String(req.body.tanggal_laporan).trim()
+                    : existing.tanggal_laporan;
+
+            const bobotRealisasi =
+                req.body?.bobot_realisasi !== undefined
+                    ? Math.min(Math.max(Number(req.body.bobot_realisasi) || 0, 0), 100)
+                    : existing.bobot_realisasi;
+
+            const rawCatatan =
+                req.body?.catatan !== undefined ? req.body.catatan : req.body?.kendala;
+            const catatan =
+                rawCatatan !== undefined
+                    ? typeof rawCatatan === 'string' && rawCatatan.trim() !== ''
+                        ? rawCatatan.trim()
+                        : null
+                    : existing.catatan;
+
+            const cuaca =
+                req.body?.cuaca !== undefined
+                    ? typeof req.body.cuaca === 'string' && req.body.cuaca.trim() !== ''
+                        ? req.body.cuaca.trim()
+                        : null
+                    : existing.cuaca;
+
+            const dokumentasi =
+                req.body?.dokumentasi !== undefined
+                    ? typeof req.body.dokumentasi === 'string' && req.body.dokumentasi.trim() !== ''
+                        ? req.body.dokumentasi
+                        : null
+                    : existing.dokumentasi;
+
+            if (!uraianPekerjaan) {
+                return res.status(400).json({ message: 'Uraian pekerjaan wajib diisi.' });
+            }
+
+            await db.query(
+                `UPDATE progress_harian
+                 SET proyek_id = ?,
+                     bangunan_id = ?,
+                     nama_bangunan = ?,
+                     pelaksana = ?,
+                     uraian_pekerjaan = ?,
+                     tanggal_laporan = ?,
+                     bobot_realisasi = ?,
+                     catatan = ?,
+                     cuaca = ?,
+                     dokumentasi = ?
+                 WHERE id = ?`,
+                [
+                    proyekId,
+                    bangunanId,
+                    namaBangunan,
+                    pelaksana,
+                    uraianPekerjaan,
+                    tanggalLaporan,
+                    bobotRealisasi,
+                    catatan,
+                    cuaca,
+                    dokumentasi,
+                    id,
+                ]
+            );
+
+            await syncBuildingAndProjectProgress(existing.proyek_id, existing.bangunan_id);
+            await syncBuildingAndProjectProgress(proyekId, bangunanId);
+
+            res.json({ message: 'Laporan progress harian berhasil diperbarui.' });
+        } catch (error) {
+            res.status(500).json({
+                message: 'Gagal memperbarui laporan progress harian',
+                error: error.message,
+            });
+        }
+    }
+);
 
 // DELETE /progress/:id
-router.delete('/progress/:id', verifyToken, async (req, res) => {
-    if (!canEditProgress(req.user?.posisi)) {
-        return res.status(403).json({
-            message: 'Anda tidak memiliki hak akses untuk menghapus laporan progress harian.',
-        });
-    }
+router.delete(
+    '/progress/:id',
+    authenticateToken,
+    authorizeRoles(...PROGRESS_WRITE_ROLES),
+    async (req, res) => {
+        const { id } = req.params;
 
-    const { id } = req.params;
+        try {
+            const [existingRows] = await db.query(
+                'SELECT proyek_id, bangunan_id FROM progress_harian WHERE id = ?',
+                [id]
+            );
+            if (existingRows.length === 0) {
+                return res.status(404).json({ message: 'Laporan progress tidak ditemukan.' });
+            }
 
-    try {
-        const [existingRows] = await db.query(
-            'SELECT proyek_id, bangunan_id FROM progress_harian WHERE id = ?',
-            [id]
-        );
-        if (existingRows.length === 0) {
-            return res.status(404).json({ message: 'Laporan progress tidak ditemukan.' });
+            const { proyek_id: proyekId, bangunan_id: bangunanId } = existingRows[0];
+
+            await db.query('DELETE FROM progress_harian WHERE id = ?', [id]);
+            await syncBuildingAndProjectProgress(proyekId, bangunanId);
+
+            res.json({ message: 'Laporan progress harian berhasil dihapus.' });
+        } catch (error) {
+            res.status(500).json({
+                message: 'Gagal menghapus laporan progress harian',
+                error: error.message,
+            });
         }
-
-        const { proyek_id: proyekId, bangunan_id: bangunanId } = existingRows[0];
-
-        await db.query('DELETE FROM progress_harian WHERE id = ?', [id]);
-        await syncBuildingAndProjectProgress(proyekId, bangunanId);
-
-        res.json({ message: 'Laporan progress harian berhasil dihapus.' });
-    } catch (error) {
-        res.status(500).json({
-            message: 'Gagal menghapus laporan progress harian',
-            error: error.message,
-        });
     }
-});
+);
 
 module.exports = router;
