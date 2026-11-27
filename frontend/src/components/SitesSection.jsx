@@ -27,9 +27,8 @@ const INITIAL_FORM = {
     gambar: '',
 };
 
-const canManageSites = (user) => {
-    const posisi = user?.posisi || user?.role || '';
-    const normalized = String(posisi).trim().toLowerCase();
+const isPmRoleValue = (val) => {
+    const normalized = String(val || '').trim().toLowerCase();
     return (
         normalized === 'pm' ||
         normalized === 'proyek manager' ||
@@ -39,8 +38,40 @@ const canManageSites = (user) => {
     );
 };
 
+const canManageSites = (user, siteId = null) => {
+    if (!user) return false;
+
+    const memberships = Array.isArray(user.memberships) ? user.memberships : [];
+    if (siteId != null && memberships.length > 0) {
+        const siteMembership = memberships.find(
+            (m) => String(m.project_id) === String(siteId)
+        );
+        if (siteMembership) {
+            return isPmRoleValue(siteMembership.role_code);
+        }
+    }
+
+    if (
+        isPmRoleValue(user.role_di_proyek) ||
+        isPmRoleValue(user.posisi) ||
+        isPmRoleValue(user.role)
+    ) {
+        return true;
+    }
+
+    return memberships.some((m) => isPmRoleValue(m.role_code));
+};
+
 const isSiteOwnedByUser = (site, user) => {
     if (!user) return true;
+
+    const memberships = Array.isArray(user.memberships) ? user.memberships : [];
+    if (memberships.length > 0) {
+        const isMember = memberships.some(
+            (m) => String(m.project_id) === String(site.id)
+        );
+        if (isMember) return true;
+    }
 
     const ownerIds = [
         site.user_id,
@@ -126,7 +157,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
     const fileInputRef = useRef(null);
 
     const hasWriteAccess = canManageSites(user);
-    const roleLabel = user?.posisi || user?.role || 'Pengguna';
+    const roleLabel = user?.role_di_proyek || user?.posisi || user?.role || 'Pengguna';
 
     const fetchAnggotaForSites = useCallback(async (sites) => {
         if (!Array.isArray(sites) || sites.length === 0) {
@@ -204,7 +235,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
 
     const handleAddBangunan = async (e, siteId) => {
         e.preventDefault();
-        if (!hasWriteAccess) return;
+        if (!canManageSites(user, siteId)) return;
 
         const siteKey = String(siteId);
         const namaBangunan = (bangunanInputBySite[siteKey] || '').trim();
@@ -256,7 +287,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
     };
 
     const handleEdit = (site) => {
-        if (!hasWriteAccess) return;
+        if (!canManageSites(user, site.id)) return;
         const currentProgress = site.persentase_progres ?? site.progress ?? 0;
         setEditId(site.id);
         setFileName('');
@@ -296,7 +327,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (!hasWriteAccess) {
+        if (!canManageSites(user, editId)) {
             alert('Hanya Proyek Manager / PM yang berwenang menambahkan atau mengubah proyek.');
             return;
         }
@@ -335,7 +366,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
     };
 
     const handleDelete = async (id, namaProyek) => {
-        if (!hasWriteAccess) {
+        if (!canManageSites(user, id)) {
             alert('Hanya Proyek Manager / PM yang berwenang menghapus proyek.');
             return;
         }
@@ -353,7 +384,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
     };
 
     const handleOpenInvite = (site) => {
-        if (!hasWriteAccess) return;
+        if (!canManageSites(user, site.id)) return;
         setInviteSite(site);
         setInviteEmail('');
         setInviteRole('');
@@ -377,12 +408,16 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
         try {
             const res = await apiClient.post(`/api/proyek/${inviteSite.id}/invite`, {
                 email: inviteEmail.trim(),
-                ...(inviteRole.trim() ? { role_proyek: inviteRole.trim() } : {}),
+                ...(inviteRole.trim()
+                    ? { role_proyek: inviteRole.trim(), role_code: inviteRole.trim() }
+                    : {}),
             });
 
             setInviteFeedback({
                 type: 'success',
-                message: res.data?.message || 'Undangan berhasil dikirim.',
+                message:
+                    res.data?.message ||
+                    'Permintaan undangan terkirim dan menunggu persetujuan SuperAdmin.',
             });
             setInviteEmail('');
             setInviteRole('');
@@ -395,7 +430,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
         } catch (err) {
             setInviteFeedback({
                 type: 'error',
-                message: err.response?.data?.message || 'Gagal mengirim undangan anggota.',
+                message: err.response?.data?.message || 'Gagal mengirim permintaan undangan.',
             });
         } finally {
             setInviteSubmitting(false);
@@ -668,6 +703,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                     {enrichedSites.map((site) => {
+                        const siteCanManage = canManageSites(user, site.id);
                         const siteKey = String(site.id);
                         const buildingInput = bangunanInputBySite[siteKey] || '';
                         const buildingSaving = Boolean(bangunanSavingBySite[siteKey]);
@@ -706,13 +742,13 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
                                                 </p>
                                             </div>
 
-                                            {hasWriteAccess && (
+                                            {siteCanManage && (
                                                 <div className="flex items-center gap-1 shrink-0">
                                                     <button
                                                         type="button"
                                                         onClick={() => handleOpenInvite(site)}
                                                         className="p-2 text-blue-400 hover:bg-blue-500/15 rounded-lg transition cursor-pointer"
-                                                        title="Invite Anggota Tim via Email"
+                                                        title="Ajukan Undangan Anggota Tim via Email"
                                                     >
                                                         <UserPlus size={15} />
                                                     </button>
@@ -783,7 +819,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
                                                 </div>
                                             )}
 
-                                            {hasWriteAccess && (
+                                            {siteCanManage && (
                                                 <form
                                                     onSubmit={(e) => handleAddBangunan(e, site.id)}
                                                     className="mt-2 flex items-center gap-2"
@@ -831,13 +867,13 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
                                                     <Users className="w-3.5 h-3.5 text-blue-400" />
                                                     Anggota Site ({site.members.length})
                                                 </span>
-                                                {hasWriteAccess && (
+                                                {siteCanManage && (
                                                     <button
                                                         type="button"
                                                         onClick={() => handleOpenInvite(site)}
                                                         className="text-[11px] font-semibold text-blue-400 hover:text-blue-300 transition cursor-pointer"
                                                     >
-                                                        + Invite Email
+                                                        + Ajukan Undangan
                                                     </button>
                                                 )}
                                             </div>
@@ -859,7 +895,9 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
                                                                 </div>
                                                                 <div className="text-[11px] text-slate-400 truncate">
                                                                     {member.email}
-                                                                    {member.posisi ? ` • ${member.posisi}` : ''}
+                                                                    {(member.role_code || member.posisi)
+                                                                        ? ` • ${member.role_code || member.posisi}`
+                                                                        : ''}
                                                                 </div>
                                                             </div>
                                                             <span
@@ -868,7 +906,11 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
                                                                     : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
                                                                     }`}
                                                             >
-                                                                {member.status === 'active' ? 'Aktif' : 'Pending'}
+                                                                {member.status === 'active'
+                                                                    ? 'Aktif'
+                                                                    : member.status === 'pending_approval'
+                                                                        ? 'Menunggu Persetujuan'
+                                                                        : 'Pending'}
                                                             </span>
                                                         </div>
                                                     ))}
@@ -897,18 +939,21 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
                 </div>
             )}
 
-            {/* Modal Invite Anggota Tim via Email */}
-            {inviteSite && hasWriteAccess && (
+            {/* Modal Ajukan Undangan Anggota Tim via Email */}
+            {inviteSite && canManageSites(user, inviteSite.id) && (
                 <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
                     <div className="w-full max-w-md bg-[#0e1626] border border-slate-800 rounded-2xl p-6 space-y-4 shadow-2xl">
                         <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-800">
                             <div>
                                 <h3 className="text-base font-bold text-white flex items-center gap-2">
                                     <UserPlus className="w-4 h-4 text-blue-400" />
-                                    <span>Invite Anggota Tim</span>
+                                    <span>Ajukan Undangan Anggota Tim</span>
                                 </h3>
                                 <p className="text-xs text-slate-400 mt-1">
                                     Site: <span className="text-slate-200 font-medium">{inviteSite.nama_proyek}</span>
+                                </p>
+                                <p className="text-[11px] text-amber-300/90 mt-1">
+                                    Permintaan undangan akan diteruskan ke SuperAdmin untuk persetujuan.
                                 </p>
                             </div>
                             <button
@@ -989,7 +1034,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
                                     disabled={inviteSubmitting}
                                     className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white text-xs font-semibold px-4 py-2 rounded-xl transition cursor-pointer"
                                 >
-                                    {inviteSubmitting ? 'Mengirim...' : 'Kirim Undangan'}
+                                    {inviteSubmitting ? 'Mengirim...' : 'Ajukan Undangan'}
                                 </button>
                             </div>
                         </form>

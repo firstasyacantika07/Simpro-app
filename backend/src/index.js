@@ -10,6 +10,7 @@ const fiturRoutes = require('./routes/fiturRoutes');
 const mosRoutes = require('./routes/mosRoutes');
 const progressRoutes = require('./routes/progressRoutes');
 const mosExportRoutes = require('./routes/mosExportRoutes');
+const superAdminRoutes = require('./routes/superAdminRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -17,67 +18,67 @@ const PORT = process.env.PORT || 5000;
 app.set('trust proxy', 1);
 
 const allowedOrigins = String(
-    process.env.CLIENT_URL || 'http://localhost:5173,http://127.0.0.1:5173'
+  process.env.CLIENT_URL || 'http://localhost:5173,http://127.0.0.1:5173'
 )
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 app.use(
-    cors({
-        origin(origin, callback) {
-            // Izinkan request non-browser / same-origin (tanpa Origin header) atau origin yang terdaftar
-            if (!origin || allowedOrigins.includes(origin)) {
-                return callback(null, true);
-            }
-            return callback(new Error(`Origin ${origin} tidak diizinkan oleh CORS.`));
-        },
-        credentials: true,
-    })
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error(`Origin ${origin} tidak diizinkan oleh CORS.`));
+    },
+    credentials: true,
+  })
 );
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// Endpoint autentikasi
+// Endpoint autentikasi & verifikasi undangan registrasi
 app.use('/api/auth', authRoutes);
+
+// Endpoint SuperAdmin
+app.use('/api/superadmin', superAdminRoutes);
 
 // Endpoint terproteksi
 app.use('/api/proyek', authenticateToken, proyekRoutes);
+app.use('/api/fitur', authenticateToken, mosExportRoutes);
 app.use('/api/fitur', authenticateToken, fiturRoutes);
 app.use('/api', authenticateToken, mosRoutes);
 app.use('/api', authenticateToken, progressRoutes);
-app.use('/api/fitur', mosExportRoutes);
 
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', service: 'SIMPRO API' });
+  res.json({ status: 'ok', service: 'SIMPRO API' });
 });
 
-// 404 handler untuk rute yang tidak ditemukan
 app.use((req, res) => {
-    res.status(404).json({ message: 'Endpoint tidak ditemukan.' });
+  res.status(404).json({ message: 'Endpoint tidak ditemukan.' });
 });
 
-// Global error handler Express
 app.use((err, req, res, next) => {
-    console.error('Unhandled Express error:', err);
-    if (res.headersSent) {
-        return next(err);
-    }
-    res.status(err?.status || 500).json({
-        message: err?.message || 'Internal server error',
-    });
+  console.error('Unhandled Express error:', err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  res.status(err?.status || 500).json({
+    message: err?.message || 'Internal server error',
+  });
 });
 
 process.on('unhandledRejection', (reason) => {
-    console.error('Unhandled Promise Rejection:', reason);
+  console.error('Unhandled Promise Rejection:', reason);
 });
 
 process.on('uncaughtException', (err) => {
-    console.error('Uncaught Exception:', err);
+  console.error('Uncaught Exception:', err);
 });
 
 app.listen(PORT, () => {
-    console.log(`SIMPRO Backend berjalan di port ${PORT}`);
+  console.log(`SIMPRO Backend berjalan di port ${PORT}`);
 });

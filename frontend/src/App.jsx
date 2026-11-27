@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
+import SuperAdminPanel from './components/SuperAdminPanel';
 import {
   getAccessToken,
   getStoredUser,
@@ -10,7 +11,11 @@ import {
   clearAuthSession,
 } from './api/axiosClient';
 
-function ProtectedRoute({ children }) {
+function isSuperAdminUser(user) {
+  return String(user?.role || '').trim().toLowerCase() === 'superadmin';
+}
+
+function ProtectedRoute({ children, requireSuperAdmin = false }) {
   const [status, setStatus] = useState(() => {
     const token = getAccessToken();
     const user = getStoredUser();
@@ -48,7 +53,6 @@ function ProtectedRoute({ children }) {
         }
       } catch {
         if (!active) return;
-        // Tetap izinkan masuk jika storedUser tersedia agar tidak langsung terpental ke /login
         if (getStoredUser()) {
           setStatus('authenticated');
         } else {
@@ -79,7 +83,21 @@ function ProtectedRoute({ children }) {
     return <Navigate to="/login" replace />;
   }
 
+  const currentUser = getStoredUser();
+
+  if (requireSuperAdmin && !isSuperAdminUser(currentUser)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  if (!requireSuperAdmin && isSuperAdminUser(currentUser)) {
+    return <Navigate to="/superadmin" replace />;
+  }
+
   return children;
+}
+
+function SuperAdminRouteElement() {
+  return <SuperAdminPanel currentUser={getStoredUser()} />;
 }
 
 function App() {
@@ -89,6 +107,14 @@ function App() {
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route
+          path="/superadmin"
+          element={
+            <ProtectedRoute requireSuperAdmin>
+              <SuperAdminRouteElement />
+            </ProtectedRoute>
+          }
+        />
         <Route
           path="/dashboard"
           element={

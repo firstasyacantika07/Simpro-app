@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { CheckCircle2, Eye, EyeOff } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { CheckCircle2, Eye, EyeOff, Info, ShieldCheck } from 'lucide-react';
 import apiClient from '../api/axiosClient';
 import backgroundImage from '../assets/Background.jpg';
 
@@ -8,15 +8,24 @@ const PROJECT_BG_IMAGE = backgroundImage;
 
 export default function Register() {
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
     const redirectTimerRef = useRef(null);
+
+    const inviteToken = String(
+        searchParams.get('token') || searchParams.get('invite_token') || ''
+    ).trim();
+    const invitedEmailFromQuery = String(searchParams.get('email') || '').trim().toLowerCase();
 
     const [formData, setFormData] = useState({
         nama: '',
-        posisi: 'Staff Proyek',
-        email: '',
+        email: invitedEmailFromQuery,
         password: '',
         confirmPassword: '',
     });
+
+    const [inviteInfo, setInviteInfo] = useState(null);
+    const [verifyingInvite, setVerifyingInvite] = useState(Boolean(inviteToken));
+    const [inviteNotice, setInviteNotice] = useState('');
 
     const [showPassword, setShowPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -33,10 +42,73 @@ export default function Register() {
         };
     }, []);
 
+    useEffect(() => {
+        let active = true;
+
+        async function verifyInvitation() {
+            if (!inviteToken) {
+                setVerifyingInvite(false);
+                setInviteInfo(null);
+                setInviteNotice(
+                    'Registrasi akun memerlukan undangan proyek yang telah disetujui oleh SuperAdmin. Jika Anda belum menerima email undangan, silakan hubungi Project Manager proyek terkait.'
+                );
+                return;
+            }
+
+            setVerifyingInvite(true);
+            setInviteNotice('');
+            setError('');
+
+            try {
+                const res = await apiClient.get('/api/auth/verify-invite', {
+                    params: {
+                        token: inviteToken,
+                        ...(invitedEmailFromQuery ? { email: invitedEmailFromQuery } : {}),
+                    },
+                });
+
+                if (!active) return;
+
+                const data = res.data || {};
+                setInviteInfo(data);
+                if (data.invited_email) {
+                    setFormData((prev) => ({
+                        ...prev,
+                        email: String(data.invited_email).trim().toLowerCase(),
+                    }));
+                }
+            } catch (err) {
+                if (!active) return;
+                setInviteInfo(null);
+                setInviteNotice(
+                    err?.response?.data?.message ||
+                        'Undangan tidak valid, belum disetujui SuperAdmin, atau sudah kedaluwarsa. Pastikan Anda membuka tautan undangan terbaru dari email.'
+                );
+            } finally {
+                if (active) {
+                    setVerifyingInvite(false);
+                }
+            }
+        }
+
+        verifyInvitation();
+
+        return () => {
+            active = false;
+        };
+    }, [inviteToken, invitedEmailFromQuery]);
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
         setSuccessMsg('');
+
+        if (!inviteToken || !inviteInfo?.valid) {
+            setError(
+                'Registrasi tidak dapat dilanjutkan tanpa undangan proyek yang telah disetujui SuperAdmin.'
+            );
+            return;
+        }
 
         if (formData.password !== formData.confirmPassword) {
             setError('Konfirmasi password tidak cocok dengan password.');
@@ -46,18 +118,18 @@ export default function Register() {
         setLoading(true);
 
         try {
-            const { confirmPassword: _confirmPassword, ...rest } = formData;
             const payload = {
-                ...rest,
-                nama: rest.nama.trim(),
-                email: rest.email.trim(),
-                posisi: rest.posisi.trim(),
+                nama: formData.nama.trim(),
+                email: formData.email.trim().toLowerCase(),
+                password: formData.password,
+                confirmPassword: formData.confirmPassword,
+                invite_token: inviteToken,
             };
 
             const res = await apiClient.post('/api/auth/register', payload);
             const message =
                 res.data?.message ||
-                'Akun berhasil terdaftar! Anda akan diarahkan ke halaman login.';
+                'Akun berhasil terdaftar dan keanggotaan proyek aktif! Anda akan diarahkan ke halaman login.';
 
             setSuccessMsg(message);
             setFormData((prev) => ({
@@ -81,6 +153,10 @@ export default function Register() {
             setLoading(false);
         }
     };
+
+    const isEmailLocked = Boolean(inviteInfo?.valid && inviteInfo?.invited_email);
+    const canSubmit = !loading && !successMsg && !verifyingInvite && Boolean(inviteInfo?.valid);
+    const loginLinkTo = '/login';
 
     return (
         <div className="min-h-screen bg-[#070b14] text-slate-100 grid lg:grid-cols-2">
@@ -132,8 +208,8 @@ export default function Register() {
                     </h1>
 
                     <p className="text-slate-200/90 text-base leading-relaxed max-w-md">
-                        Daftarkan akun tim Anda sesuai peran lapangan untuk mulai mengelola
-                        Material On Site (MOS) dan laporan progres harian secara terintegrasi.
+                        Daftarkan akun tim Anda melalui undangan proyek yang telah disetujui
+                        untuk mulai mengelola Material On Site (MOS) dan laporan progres harian.
                     </p>
 
                     {/* Feature Highlights */}
@@ -156,9 +232,9 @@ export default function Register() {
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064" />
                                 </svg>
                             </div>
-                            <h2 className="text-sm font-semibold text-white">Multi-Role & Progres</h2>
+                            <h2 className="text-sm font-semibold text-white">Akses Proyek Terverifikasi</h2>
                             <p className="text-xs text-slate-300/80 mt-1 leading-relaxed">
-                                Koordinasi akses Staff Proyek, Admin, Logistik, dan QS secara terpusat.
+                                Role keanggotaan proyek ditetapkan melalui persetujuan SuperAdmin.
                             </p>
                         </div>
                     </div>
@@ -196,9 +272,41 @@ export default function Register() {
                             Create an account
                         </h2>
                         <p className="text-sm text-slate-400">
-                            Lengkapi data diri dan posisi Anda untuk bergabung di SIMPRO.
+                            Lengkapi data diri Anda sesuai undangan proyek yang telah disetujui.
                         </p>
                     </div>
+
+                    {/* Invitation Verification Status */}
+                    {verifyingInvite && (
+                        <div className="bg-slate-800/60 border border-slate-700 text-slate-300 text-xs px-4 py-3 rounded-lg mb-5 text-left">
+                            Memverifikasi status undangan proyek...
+                        </div>
+                    )}
+
+                    {!verifyingInvite && inviteInfo?.valid && (
+                        <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 text-xs px-4 py-3 rounded-lg mb-5 text-left space-y-1">
+                            <div className="flex items-center gap-2 font-semibold text-emerald-300">
+                                <ShieldCheck className="w-4 h-4 shrink-0" />
+                                <span>Undangan Proyek Terverifikasi</span>
+                            </div>
+                            <p>Proyek: <strong className="text-white">{inviteInfo.nama_proyek}</strong></p>
+                            <p>Role Ditetapkan: <strong className="text-white">{inviteInfo.role_code}</strong></p>
+                            <p>Email Terdaftar Undangan: <strong className="text-white">{inviteInfo.invited_email}</strong></p>
+                        </div>
+                    )}
+
+                    {!verifyingInvite && !inviteInfo?.valid && inviteNotice && (
+                        <div className="bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs px-4 py-3 rounded-lg mb-5 text-left space-y-1.5">
+                            <div className="flex items-center gap-2 font-semibold text-amber-300">
+                                <Info className="w-4 h-4 shrink-0" />
+                                <span>Informasi Mekanisme Registrasi</span>
+                            </div>
+                            <p className="leading-relaxed">{inviteNotice}</p>
+                            <p className="text-amber-300/90">
+                                Sudah memiliki akun SIMPRO? Silakan masuk melalui tautan login di bawah untuk menautkan undangan.
+                            </p>
+                        </div>
+                    )}
 
                     {/* Success Notification */}
                     {successMsg && (
@@ -218,7 +326,7 @@ export default function Register() {
                         </div>
                     )}
 
-                    {/* Register Form */}
+                    {/* Register Form (Tanpa Pilihan Role) */}
                     <form onSubmit={handleSubmit} className="space-y-4 text-left">
                         <div>
                             <label className="block text-left text-[11px] font-semibold tracking-wider uppercase text-slate-400 mb-2">
@@ -236,40 +344,14 @@ export default function Register() {
 
                         <div>
                             <label className="block text-left text-[11px] font-semibold tracking-wider uppercase text-slate-400 mb-2">
-                                Posisi / Jabatan
-                            </label>
-                            <select
-                                className="w-full bg-[#131926] border border-slate-800 text-slate-100 rounded-lg px-4 py-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-                                value={formData.posisi}
-                                onChange={(e) => setFormData({ ...formData, posisi: e.target.value })}
-                            >
-                                <option value="Staff Proyek" className="bg-[#131926] text-slate-100">
-                                    Staff Proyek
-                                </option>
-                                <option value="Admin Proyek" className="bg-[#131926] text-slate-100">
-                                    Admin Proyek
-                                </option>
-                                <option value="Logistik" className="bg-[#131926] text-slate-100">
-                                    Logistik
-                                </option>
-                                <option value="QS (Quantity Surveyor)" className="bg-[#131926] text-slate-100">
-                                    QS (Quantity Surveyor)
-                                </option>
-                                <option value="Project Manager" className="bg-[#131926] text-slate-100">
-                                    Project Manager
-                                </option>
-                            </select>
-                        </div>
-
-                        <div>
-                            <label className="block text-left text-[11px] font-semibold tracking-wider uppercase text-slate-400 mb-2">
                                 Email
                             </label>
                             <input
                                 type="email"
                                 required
+                                readOnly={isEmailLocked}
                                 placeholder="nama@perusahaan.com"
-                                className="w-full bg-[#131926] border border-slate-800 text-slate-100 placeholder-slate-500 rounded-lg px-4 py-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                                className="w-full bg-[#131926] border border-slate-800 text-slate-100 placeholder-slate-500 read-only:opacity-80 rounded-lg px-4 py-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                                 value={formData.email}
                                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                             />
@@ -302,7 +384,7 @@ export default function Register() {
 
                         <div>
                             <label className="block text-left text-[11px] font-semibold tracking-wider uppercase text-slate-400 mb-2">
-                                Verifikasi Password
+                                Konfirmasi Password
                             </label>
                             <div className="relative">
                                 <input
@@ -321,8 +403,8 @@ export default function Register() {
                                     onClick={() => setShowConfirmPassword(!showConfirmPassword)}
                                     aria-label={
                                         showConfirmPassword
-                                            ? 'Sembunyikan verifikasi password'
-                                            : 'Tampilkan verifikasi password'
+                                            ? 'Sembunyikan konfirmasi password'
+                                            : 'Tampilkan konfirmasi password'
                                     }
                                     className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition cursor-pointer"
                                 >
@@ -333,7 +415,7 @@ export default function Register() {
 
                         <button
                             type="submit"
-                            disabled={loading || Boolean(successMsg)}
+                            disabled={!canSubmit}
                             className="w-full mt-2 bg-blue-500 hover:bg-blue-400 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg transition flex items-center justify-center gap-2 cursor-pointer"
                         >
                             {loading ? (
@@ -357,7 +439,7 @@ export default function Register() {
                     <div className="mt-7 pt-6 border-t border-slate-800/80 text-center text-sm text-slate-400">
                         Sudah memiliki akun?{' '}
                         <Link
-                            to="/login"
+                            to={loginLinkTo}
                             className="font-semibold text-blue-400 hover:text-blue-300 transition"
                         >
                             Masuk di sini

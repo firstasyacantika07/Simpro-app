@@ -1,7 +1,12 @@
+const db = require('../config/db');
 const { verifyAccessToken } = require('../services/tokenService');
 
 function normalizeRole(role = '') {
     return String(role).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function isSuperAdminRole(role = '') {
+    return normalizeRole(role) === 'superadmin';
 }
 
 function matchesAllowedRole(userRole, allowedRole) {
@@ -18,7 +23,7 @@ function matchesAllowedRole(userRole, allowedRole) {
     return false;
 }
 
-function authenticateToken(req, res, next) {
+async function authenticateToken(req, res, next) {
     const authHeader = req.headers.authorization || '';
     const [scheme, token] = authHeader.split(' ');
 
@@ -31,11 +36,36 @@ function authenticateToken(req, res, next) {
 
     try {
         const decoded = verifyAccessToken(token);
+        const [rows] = await db.query(
+            `SELECT id, nama, email, posisi, role, is_active
+             FROM users
+             WHERE id = ?
+             LIMIT 1`,
+            [decoded.id]
+        );
+
+        const dbUser = rows?.[0];
+        if (!dbUser) {
+            return res.status(401).json({
+                message: 'Pengguna tidak ditemukan.',
+                code: 'USER_NOT_FOUND',
+            });
+        }
+
+        if (Number(dbUser.is_active) === 0) {
+            return res.status(403).json({
+                message: 'Akun Anda sedang dinonaktifkan.',
+                code: 'ACCOUNT_INACTIVE',
+            });
+        }
+
         req.user = {
-            id: decoded.id,
-            email: decoded.email,
-            role: decoded.role || decoded.posisi,
-            posisi: decoded.posisi || decoded.role,
+            id: dbUser.id,
+            nama: dbUser.nama,
+            email: dbUser.email,
+            role: dbUser.role || 'user',
+            posisi: dbUser.posisi || 'Staff Proyek',
+            is_active: Number(dbUser.is_active) === 1,
         };
         return next();
     } catch (err) {
@@ -55,8 +85,13 @@ function authorizeRoles(...allowedRoles) {
             return res.status(401).json({ message: 'Pengguna belum terautentikasi.' });
         }
 
-        const userRole = req.user.role || req.user.posisi || '';
-        const isAuthorized = allowedRoles.some((role) => matchesAllowedRole(userRole, role));
+        const effectiveRole = isSuperAdminRole(req.user.role)
+            ? 'SuperAdmin'
+            : req.user.posisi || req.user.role || '';
+
+        const isAuthorized = allowedRoles.some((role) =>
+            matchesAllowedRole(effectiveRole, role)
+        );
 
         if (!isAuthorized) {
             return res.status(403).json({
@@ -68,8 +103,23 @@ function authorizeRoles(...allowedRoles) {
     };
 }
 
+function requireSuperAdmin(req, res, next) {
+    if (!req.user) {
+        return res.status(401).json({ message: 'Pengguna belum terautentikasi.' });
+    }
+    if (!isSuperAdminRole(req.user.role)) {
+        return res.status(403).json({
+            message: 'Akses khusus SuperAdmin.',
+        });
+    }
+    return next();
+}
+
 module.exports = {
     authenticateToken,
     authorizeRoles,
+    requireSuperAdmin,
     normalizeRole,
+    isSuperAdminRole,
+    matchesAllowedRole,
 };

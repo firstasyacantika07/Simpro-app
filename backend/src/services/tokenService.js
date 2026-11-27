@@ -27,14 +27,25 @@ function parseDurationToMs(durationStr, fallbackMs) {
   return value * (multipliers[unit] || 1000);
 }
 
+function resolveTokenRole(user = {}) {
+  const rawRole = String(user?.role || '').trim();
+  if (rawRole.toLowerCase() === 'superadmin') {
+    return 'SuperAdmin';
+  }
+  return rawRole || String(user?.posisi || 'Staff Proyek').trim();
+}
+
 function buildAccessToken(user) {
   const secret = getJwtSecret();
+  const posisi = String(user?.posisi || 'Staff Proyek').trim();
+  const role = resolveTokenRole(user);
+
   const payload = {
     id: user.id,
     nama: user.nama,
     email: user.email,
-    posisi: user.posisi,
-    role: user.posisi,
+    posisi,
+    role,
     type: 'access',
   };
 
@@ -64,10 +75,12 @@ function verifyAccessToken(rawToken) {
 function buildRefreshToken(user) {
   const refreshSecret = getJwtRefreshSecret();
   const jti = crypto.randomBytes(16).toString('hex');
+  const role = resolveTokenRole(user);
 
   const payload = {
     id: user.id,
     email: user.email,
+    role,
     type: 'refresh',
     jti,
   };

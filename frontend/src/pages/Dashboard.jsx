@@ -38,6 +38,7 @@ import apiClient, {
 const PROJECT_HERO_IMAGE = '/foto.jpg';
 const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#84cc16', '#8b5cf6', '#06b6d4'];
 const READ_NOTIFICATIONS_KEY = 'simpro_read_notification_ids';
+const ACTIVE_PROJECT_STORAGE_KEY = 'simpro_active_project_id';
 
 // Default koordinat Kab. Madiun / Desa Wonorejo, Jawa Timur
 const DEFAULT_WEATHER_COORDS = {
@@ -45,6 +46,9 @@ const DEFAULT_WEATHER_COORDS = {
     longitude: 111.6531,
     locationName: 'Kab. Madiun',
 };
+
+const isSuperAdminRole = (user) =>
+    String(user?.role || '').trim().toLowerCase() === 'superadmin';
 
 const extractArray = (payload, keys = ['data']) => {
     if (Array.isArray(payload)) return payload;
@@ -549,7 +553,7 @@ function NotifikasiView({ activities, readIds, onMarkRead, onNavigate }) {
     );
 }
 
-function PengaturanView({ user, setUser }) {
+function PengaturanView({ user, setUser, activeMembership }) {
     const [nama, setNama] = useState(user?.nama || '');
     const [email, setEmail] = useState(user?.email || '');
     const [password, setPassword] = useState('');
@@ -599,13 +603,16 @@ function PengaturanView({ user, setUser }) {
         }
     };
 
+    const roleDisplay = activeMembership?.role_code || user?.posisi || user?.role || 'Anggota Proyek';
+
     return (
         <div className="max-w-2xl space-y-6 text-left">
             <div>
                 <h2 className="text-xl font-bold text-white">Pengaturan Akun</h2>
                 <p className="text-sm text-slate-400">
                     Perbarui informasi akun atau password Anda. Role saat ini:{' '}
-                    <span className="text-blue-400 font-semibold">{user?.posisi || user?.role}</span>.
+                    <span className="text-blue-400 font-semibold">{roleDisplay}</span>
+                    {activeMembership?.nama_proyek ? ` · Proyek: ${activeMembership.nama_proyek}` : ''}.
                 </p>
             </div>
 
@@ -619,7 +626,7 @@ function PengaturanView({ user, setUser }) {
                     </div>
                     <div>
                         <div className="text-sm font-semibold text-white">Informasi Profil</div>
-                        <div className="text-xs text-slate-400">Peran: {user?.posisi || user?.role}</div>
+                        <div className="text-xs text-slate-400">Peran: {roleDisplay}</div>
                     </div>
                 </div>
 
@@ -697,7 +704,14 @@ export default function Dashboard() {
     const [mosList, setMosList] = useState([]);
     const [progressList, setProgressList] = useState([]);
     const [selectedDate, setSelectedDate] = useState('');
-    const [selectedProyekId, setSelectedProyekId] = useState(null);
+    const [selectedProyekId, setSelectedProyekId] = useState(() => {
+        try {
+            const saved = localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY);
+            return saved ? Number(saved) || saved : null;
+        } catch {
+            return null;
+        }
+    });
     const [mobileNavOpen, setMobileNavOpen] = useState(false);
     const [loadingData, setLoadingData] = useState(false);
     const [readNotificationIds, setReadNotificationIds] = useState(() => {
@@ -725,6 +739,20 @@ export default function Dashboard() {
         setUser(null);
         navigate('/login', { replace: true });
     }, [navigate]);
+
+    const handleSelectProjectContext = useCallback((projectId) => {
+        const normalized = projectId === '' || projectId == null ? null : projectId;
+        setSelectedProyekId(normalized);
+        try {
+            if (normalized != null) {
+                localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, String(normalized));
+            } else {
+                localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);
+            }
+        } catch {
+            // abaikan jika storage tidak tersedia
+        }
+    }, []);
 
     const fetchRealWeather = useCallback(async (lat, lon, locName) => {
         try {
@@ -803,13 +831,15 @@ export default function Dashboard() {
         return () => clearInterval(timer);
     }, [user, fetchRealWeather]);
 
-    const loadDashboardData = useCallback(async () => {
+    const loadDashboardData = useCallback(async (projectContextId = null) => {
         setLoadingData(true);
+
+        const params = projectContextId ? { proyek_id: projectContextId } : {};
 
         const [resProyek, resMos, resProgress] = await Promise.allSettled([
             apiClient.get('/api/proyek'),
-            apiClient.get('/api/fitur/mos'),
-            apiClient.get('/api/fitur/progress'),
+            apiClient.get('/api/fitur/mos', { params }),
+            apiClient.get('/api/fitur/progress', { params }),
         ]);
 
         if (resProyek.status === 'fulfilled') {
@@ -841,9 +871,13 @@ export default function Dashboard() {
             const storedUser = getStoredUser();
 
             if (token && storedUser) {
+                if (isSuperAdminRole(storedUser)) {
+                    if (active) navigate('/superadmin', { replace: true });
+                    return;
+                }
                 if (active) {
                     setUser(storedUser);
-                    loadDashboardData();
+                    loadDashboardData(selectedProyekId);
                 }
                 return;
             }
@@ -859,8 +893,12 @@ export default function Dashboard() {
                 const refreshed = await refreshAccessToken();
                 const resolvedUser = refreshed?.user || storedUser;
                 if (active && refreshed?.accessToken && resolvedUser) {
+                    if (isSuperAdminRole(resolvedUser)) {
+                        navigate('/superadmin', { replace: true });
+                        return;
+                    }
                     setUser(resolvedUser);
-                    loadDashboardData();
+                    loadDashboardData(selectedProyekId);
                 } else if (active) {
                     clearSessionAndRedirect();
                 }
@@ -876,16 +914,32 @@ export default function Dashboard() {
         return () => {
             active = false;
         };
-    }, [clearSessionAndRedirect, loadDashboardData]);
+    }, [clearSessionAndRedirect, loadDashboardData, navigate, selectedProyekId]);
+
+    const memberships = useMemo(
+        () => (Array.isArray(user?.memberships) ? user.memberships : []),
+        [user]
+    );
+
+    const activeMembership = useMemo(() => {
+        if (!memberships.length) return null;
+        if (selectedProyekId != null) {
+            const found = memberships.find(
+                (m) => String(m.project_id) === String(selectedProyekId)
+            );
+            if (found) return found;
+        }
+        return memberships[0];
+    }, [memberships, selectedProyekId]);
 
     const handleRefresh = useCallback(() => {
-        loadDashboardData();
+        loadDashboardData(selectedProyekId);
         fetchRealWeather(
             DEFAULT_WEATHER_COORDS.latitude,
             DEFAULT_WEATHER_COORDS.longitude,
             DEFAULT_WEATHER_COORDS.locationName
         );
-    }, [loadDashboardData, fetchRealWeather]);
+    }, [loadDashboardData, selectedProyekId, fetchRealWeather]);
 
     const handleOpenCalendarPicker = useCallback(() => {
         const el = dateInputRef.current;
@@ -912,26 +966,36 @@ export default function Dashboard() {
     }, []);
 
     const handleNavigate = useCallback((menuId) => {
-        if (menuId === 'progress' || menuId === 'mos') {
-            setSelectedProyekId(null);
-        }
         setActiveMenu(menuId);
         setMobileNavOpen(false);
     }, []);
 
-    const handleOpenProgressFromSite = useCallback((site) => {
-        if (site?.id !== undefined && site?.id !== null) {
-            setSelectedProyekId(site.id);
-        }
-        setActiveMenu('progress');
-        setMobileNavOpen(false);
-    }, []);
+    const handleOpenProgressFromSite = useCallback(
+        (site) => {
+            if (site?.id !== undefined && site?.id !== null) {
+                handleSelectProjectContext(site.id);
+            }
+            setActiveMenu('progress');
+            setMobileNavOpen(false);
+        },
+        [handleSelectProjectContext]
+    );
 
     const handleLogout = async () => {
         await logoutRequest();
         setUser(null);
         navigate('/login', { replace: true });
     };
+
+    const effectiveUser = useMemo(() => {
+        if (!user) return null;
+        if (!activeMembership?.role_code) return user;
+        return {
+            ...user,
+            posisi: activeMembership.role_code,
+            role_di_proyek: activeMembership.role_code,
+        };
+    }, [user, activeMembership]);
 
     const progressByProyek = useMemo(() => {
         const map = new Map();
@@ -967,7 +1031,13 @@ export default function Dashboard() {
         });
     }, [proyekList, progressByProyek]);
 
-    const featuredSite = sitesDisplay[0] || null;
+    const featuredSite = useMemo(() => {
+        if (selectedProyekId != null) {
+            const matched = sitesDisplay.find((s) => String(s.id) === String(selectedProyekId));
+            if (matched) return matched;
+        }
+        return sitesDisplay[0] || null;
+    }, [sitesDisplay, selectedProyekId]);
 
     const availableDates = useMemo(() => {
         const set = new Set();
@@ -1152,7 +1222,11 @@ export default function Dashboard() {
     }, [recentActivities, markNotificationsAsRead, handleNavigate]);
 
     const getHeaderInfo = () => {
-        const roleLabel = user?.posisi || user?.role || '';
+        const roleLabel = activeMembership?.role_code || user?.posisi || user?.role || '';
+        const projectSuffix = activeMembership?.nama_proyek
+            ? ` · ${activeMembership.nama_proyek}`
+            : '';
+
         switch (activeMenu) {
             case 'sites':
                 return {
@@ -1182,17 +1256,17 @@ export default function Dashboard() {
             case 'pengaturan':
                 return {
                     title: 'Pengaturan Akun',
-                    subtitle: `Kelola profil dan hak akses peran ${roleLabel || 'Tim SIMPRO'}.`,
+                    subtitle: `Kelola profil dan hak akses peran ${roleLabel || 'Tim SIMPRO'}${projectSuffix}.`,
                 };
             default:
                 return {
                     title: 'Dashboard',
-                    subtitle: `Selamat datang, ${user?.nama || 'Pengguna'} · ${roleLabel}`,
+                    subtitle: `Selamat datang, ${user?.nama || 'Pengguna'} · ${roleLabel}${projectSuffix}`,
                 };
         }
     };
 
-    if (!user) return null;
+    if (!user || isSuperAdminRole(user)) return null;
 
     const headerInfo = getHeaderInfo();
 
@@ -1207,7 +1281,7 @@ export default function Dashboard() {
 
             {/* LEFT SIDEBAR */}
             <Sidebar
-                user={user}
+                user={effectiveUser}
                 activeMenu={activeMenu}
                 mobileNavOpen={mobileNavOpen}
                 onCloseMobileNav={() => setMobileNavOpen(false)}
@@ -1238,6 +1312,32 @@ export default function Dashboard() {
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2.5 ml-auto">
+                        {memberships.length > 1 && (
+                            <div className="relative flex items-center gap-2 bg-[#11192b] border border-slate-800 hover:border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-200">
+                                <Building2 className="w-4 h-4 text-blue-400 shrink-0" />
+                                <select
+                                    value={selectedProyekId ?? ''}
+                                    onChange={(e) => handleSelectProjectContext(e.target.value)}
+                                    className="bg-transparent text-slate-100 font-medium outline-none pr-5 appearance-none cursor-pointer"
+                                    aria-label="Pilih konteks proyek"
+                                >
+                                    <option value="" className="bg-[#11192b]">
+                                        Semua Proyek ({memberships.length})
+                                    </option>
+                                    {memberships.map((m) => (
+                                        <option
+                                            key={`${m.project_id}-${m.role_code}`}
+                                            value={m.project_id}
+                                            className="bg-[#11192b]"
+                                        >
+                                            {m.nama_proyek || `Proyek #${m.project_id}`} ({m.role_code})
+                                        </option>
+                                    ))}
+                                </select>
+                                <ChevronDown className="w-4 h-4 text-slate-400 pointer-events-none absolute right-2.5" />
+                            </div>
+                        )}
+
                         {activeMenu === 'overview' && (
                             <>
                                 {/* Satu Filter Tanggal Terpadu: Ikon Kalender + Semua Tanggal */}
@@ -1646,7 +1746,7 @@ export default function Dashboard() {
 
                     {activeMenu === 'sites' && (
                         <SitesSection
-                            user={user}
+                            user={effectiveUser}
                             onDataChanged={handleRefresh}
                             onOpenProgress={handleOpenProgressFromSite}
                         />
@@ -1654,17 +1754,17 @@ export default function Dashboard() {
 
                     {activeMenu === 'mos' && (
                         <MosSection
-                            user={user}
+                            user={effectiveUser}
                             selectedProyekId={selectedProyekId}
-                            onSelectProyekId={setSelectedProyekId}
+                            onSelectProyekId={handleSelectProjectContext}
                         />
                     )}
 
                     {activeMenu === 'progress' && (
                         <ProgressSection
-                            user={user}
+                            user={effectiveUser}
                             selectedProyekId={selectedProyekId}
-                            onSelectProyekId={setSelectedProyekId}
+                            onSelectProyekId={handleSelectProjectContext}
                         />
                     )}
 
@@ -1687,7 +1787,11 @@ export default function Dashboard() {
                     )}
 
                     {activeMenu === 'pengaturan' && (
-                        <PengaturanView user={user} setUser={setUser} />
+                        <PengaturanView
+                            user={effectiveUser}
+                            setUser={setUser}
+                            activeMembership={activeMembership}
+                        />
                     )}
                 </main>
 

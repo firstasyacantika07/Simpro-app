@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import backgroundImage from '../assets/Background.jpg';
 import apiClient, {
     getAccessToken,
@@ -10,8 +10,21 @@ import apiClient, {
 
 const PROJECT_BG_IMAGE = backgroundImage;
 
+function isSuperAdminUser(user) {
+    return String(user?.role || '').trim().toLowerCase() === 'superadmin';
+}
+
+function resolvePostLoginPath(user) {
+    return isSuperAdminUser(user) ? '/superadmin' : '/dashboard';
+}
+
 export default function Login() {
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+
+    const inviteToken = String(
+        searchParams.get('invite_token') || searchParams.get('token') || ''
+    ).trim();
 
     const [identifier, setIdentifier] = useState('');
     const [password, setPassword] = useState('');
@@ -29,18 +42,22 @@ export default function Login() {
         let active = true;
 
         async function checkExistingSession() {
-            if (getAccessToken() && getStoredUser()) {
-                navigate('/dashboard', { replace: true });
+            const existingToken = getAccessToken();
+            const existingUser = getStoredUser();
+
+            if (existingToken && existingUser) {
+                navigate(resolvePostLoginPath(existingUser), { replace: true });
                 return;
             }
 
-            if (!getStoredUser()) return;
+            if (!existingUser) return;
 
             try {
                 const refreshed = await refreshAccessToken();
-                if (active && refreshed?.accessToken) {
-                    navigate('/dashboard', { replace: true });
-                }
+                if (!active || !refreshed?.accessToken) return;
+
+                const nextUser = refreshed?.user || getStoredUser() || existingUser;
+                navigate(resolvePostLoginPath(nextUser), { replace: true });
             } catch {
                 // Biarkan di halaman login jika tidak ada refresh token valid
             }
@@ -59,10 +76,13 @@ export default function Login() {
         setLoading(true);
 
         try {
-            const res = await apiClient.post('/api/auth/login', {
+            const payload = {
                 identifier: identifier.trim(),
                 password,
-            });
+                ...(inviteToken ? { invite_token: inviteToken } : {}),
+            };
+
+            const res = await apiClient.post('/api/auth/login', payload);
 
             const accessToken = res.data?.accessToken || res.data?.token;
             const user = res.data?.user;
@@ -73,7 +93,7 @@ export default function Login() {
             }
 
             setAuthSession({ accessToken, user });
-            navigate('/dashboard', { replace: true });
+            navigate(resolvePostLoginPath(user), { replace: true });
         } catch (err) {
             if (!err?.response) {
                 setError(
@@ -117,6 +137,10 @@ export default function Login() {
             setResetLoading(false);
         }
     };
+
+    const registerLinkTo = inviteToken
+        ? `/register?token=${encodeURIComponent(inviteToken)}`
+        : '/register';
 
     return (
         <div className="min-h-screen bg-[#070b14] text-slate-100 grid lg:grid-cols-2">
@@ -236,6 +260,13 @@ export default function Login() {
                         </p>
                     </div>
 
+                    {/* Invite Token Notice */}
+                    {inviteToken && (
+                        <div className="bg-blue-500/10 border border-blue-500/30 text-blue-200 text-xs px-4 py-3 rounded-lg mb-5 text-left">
+                            Undangan proyek terdeteksi. Masuk dengan akun terdaftar untuk mengaktifkan keanggotaan proyek Anda.
+                        </div>
+                    )}
+
                     {/* Error Alert */}
                     {error && (
                         <div className="bg-red-500/10 border border-red-500/30 text-red-300 text-sm px-4 py-3 rounded-lg mb-5 text-left">
@@ -308,7 +339,7 @@ export default function Login() {
                     <div className="mt-8 pt-6 border-t border-slate-800/80 text-center text-sm text-slate-400">
                         Don&apos;t have an account?{' '}
                         <Link
-                            to="/register"
+                            to={registerLinkTo}
                             className="font-semibold text-blue-400 hover:text-blue-300 transition"
                         >
                             Create one now

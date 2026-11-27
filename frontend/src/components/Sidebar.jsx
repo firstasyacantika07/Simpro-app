@@ -2,7 +2,6 @@ import {
     LayoutDashboard,
     Building2,
     Package,
-    TrendingUp,
     FileText,
     Bell,
     Settings,
@@ -29,6 +28,9 @@ export default function Sidebar({
     onLogout,
 }) {
     if (!user) return null;
+
+    const roleSubtitle =
+        user.role_di_proyek || user.posisi || user.role || 'Anggota Proyek';
 
     return (
         <>
@@ -129,7 +131,7 @@ export default function Sidebar({
                                     {user.nama}
                                 </div>
                                 <div className="text-[11px] text-slate-400 truncate">
-                                    {user.posisi}
+                                    {roleSubtitle}
                                 </div>
                             </div>
                         </div>
