@@ -2,6 +2,7 @@ import {
     LayoutDashboard,
     Building2,
     Package,
+    ClipboardList,
     FileText,
     Bell,
     Settings,
@@ -14,6 +15,7 @@ const NAV_ITEMS = [
     { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'sites', label: 'Sites', icon: Building2 },
     { id: 'mos', label: 'MOS', sublabel: 'Material on Site', icon: Package },
+    { id: 'progress', label: 'Progress', sublabel: 'Harian & Mingguan', icon: ClipboardList },
     { id: 'laporan', label: 'Laporan', icon: FileText },
     { id: 'notifikasi', label: 'Notifikasi', icon: Bell },
     { id: 'pengaturan', label: 'Pengaturan', icon: Settings },
@@ -42,9 +44,8 @@ export default function Sidebar({
             )}
 
             <aside
-                className={`fixed lg:static inset-y-0 left-0 z-40 w-64 bg-[#0a101d] border-r border-slate-800/80 flex flex-col justify-between transition-transform duration-200 ${
-                    mobileNavOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-                }`}
+                className={`fixed lg:static inset-y-0 left-0 z-40 w-64 bg-[#0a101d] border-r border-slate-800/80 flex flex-col justify-between transition-transform duration-200 ${mobileNavOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+                    }`}
             >
                 <div>
                     <div className="h-20 px-5 flex items-center justify-between border-b border-slate-800/60">
@@ -84,16 +85,14 @@ export default function Sidebar({
                                     key={item.id}
                                     type="button"
                                     onClick={() => onNavigate(item.id)}
-                                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-left transition cursor-pointer ${
-                                        isActive
-                                            ? 'bg-blue-600 text-white shadow-md shadow-blue-600/25'
-                                            : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/50'
-                                    }`}
+                                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-left transition cursor-pointer ${isActive
+                                        ? 'bg-blue-600 text-white shadow-md shadow-blue-600/25'
+                                        : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/50'
+                                        }`}
                                 >
                                     <Icon
-                                        className={`w-4 h-4 shrink-0 ${
-                                            isActive ? 'text-white' : 'text-slate-400'
-                                        }`}
+                                        className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'
+                                            }`}
                                     />
                                     <div className="min-w-0">
                                         <div className="text-sm font-medium leading-snug truncate">
@@ -101,9 +100,8 @@ export default function Sidebar({
                                         </div>
                                         {item.sublabel && (
                                             <div
-                                                className={`text-[11px] leading-tight ${
-                                                    isActive ? 'text-blue-100/80' : 'text-slate-500'
-                                                }`}
+                                                className={`text-[11px] leading-tight ${isActive ? 'text-blue-100/80' : 'text-slate-500'
+                                                    }`}
                                             >
                                                 {item.sublabel}
                                             </div>

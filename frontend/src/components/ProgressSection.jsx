@@ -12,7 +12,10 @@ import {
     Calendar,
     BarChart3,
     RotateCcw,
+    Download,
 } from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { canEditProgress } from '../utils/rbac';
 import apiClient, { extractArray } from '../api/axiosClient';
 
@@ -53,7 +56,34 @@ const formatDecimalPercent = (value) => {
 };
 
 const isImageDataUrl = (val = '') =>
-    typeof val === 'string' && val.startsWith('data:image/');
+    typeof val === 'string' &&
+    (val.startsWith('data:image/') || /\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(val));
+
+const isPdfDocument = (val = '') =>
+    typeof val === 'string' &&
+    (val.startsWith('data:application/pdf') || /\.pdf(\?|$)/i.test(val));
+
+const dataUrlToBlobUrl = (dataUrl = '') => {
+    if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
+        return dataUrl;
+    }
+    try {
+        const parts = dataUrl.split(',');
+        if (parts.length < 2) return dataUrl;
+        const mimeMatch = parts[0].match(/data:([^;]+);base64/i);
+        const mimeType = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
+        const byteString = atob(parts[1]);
+        const len = byteString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i += 1) {
+            bytes[i] = byteString.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: mimeType });
+        return URL.createObjectURL(blob);
+    } catch (_) {
+        return dataUrl;
+    }
+};
 
 const getSiteLabel = (site) =>
     site?.nama_proyek ||
@@ -105,6 +135,12 @@ const getWeekRangeLabel = (mondayKey) => {
     return `${start.toLocaleDateString('id-ID', optsShort)} – ${end.toLocaleDateString('id-ID', optsFull)}`;
 };
 
+const sanitizeSlug = (text = '') =>
+    String(text)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'site';
+
 export default function ProgressSection({
     user,
     selectedProyekId = null,
@@ -126,6 +162,7 @@ export default function ProgressSection({
         pelaksana: user?.nama || '',
     });
     const [docFileName, setDocFileName] = useState('');
+    const [previewDoc, setPreviewDoc] = useState(null);
 
     const fileInputRef = useRef(null);
 
@@ -137,6 +174,33 @@ export default function ProgressSection({
         : form.proyek_id
             ? String(form.proyek_id)
             : '';
+
+    const previewBlobUrl = useMemo(() => {
+        if (!previewDoc?.src) return '';
+        return dataUrlToBlobUrl(previewDoc.src);
+    }, [previewDoc]);
+
+    useEffect(() => {
+        return () => {
+            if (previewBlobUrl && previewBlobUrl.startsWith('blob:')) {
+                URL.revokeObjectURL(previewBlobUrl);
+            }
+        };
+    }, [previewBlobUrl]);
+
+    const handleDownloadDoc = (docItem) => {
+        if (!docItem?.src) return;
+        const url = dataUrlToBlobUrl(docItem.src);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = docItem.title || `dokumentasi-progress-${docItem.id || 'file'}`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        if (url.startsWith('blob:')) {
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+    };
 
     const fetchBangunan = useCallback(
         async (proyekId, preferredBangunanId = null, preferredNamaBangunan = '') => {
@@ -219,8 +283,8 @@ export default function ProgressSection({
         setProyekError('');
 
         const progUrl = activeProyekId
-            ? `/api/fitur/progress?proyek_id=${encodeURIComponent(activeProyekId)}`
-            : '/api/fitur/progress';
+            ? `/api/progress?proyek_id=${encodeURIComponent(activeProyekId)}`
+            : '/api/progress';
 
         const [progResult, proyekResult] = await Promise.allSettled([
             apiClient.get(progUrl),
@@ -284,7 +348,11 @@ export default function ProgressSection({
         );
     }, [proyekList, activeProyekId]);
 
-    // Seluruh laporan milik site yang dipilih
+    const siteLabel = useMemo(
+        () => getSiteLabel(selectedProyek) || `Site #${activeProyekId}`,
+        [selectedProyek, activeProyekId]
+    );
+
     const siteProgressList = useMemo(() => {
         if (!activeProyekId) return [];
         return progressList.filter(
@@ -292,7 +360,6 @@ export default function ProgressSection({
         );
     }, [progressList, activeProyekId]);
 
-    // Daftar tanggal unik yang tersedia pada site terpilih
     const availableDates = useMemo(() => {
         const setDates = new Set();
         siteProgressList.forEach((item) => {
@@ -302,7 +369,6 @@ export default function ProgressSection({
         return Array.from(setDates).sort((a, b) => b.localeCompare(a));
     }, [siteProgressList]);
 
-    // Rangkuman progress mingguan (berdasarkan Senin - Minggu)
     const weeklySummaryList = useMemo(() => {
         if (siteProgressList.length === 0) return [];
 
@@ -344,7 +410,6 @@ export default function ProgressSection({
             });
     }, [siteProgressList]);
 
-    // Laporan yang tampil di tabel sesuai filter tanggal laporan atau minggu terpilih
     const visibleProgressList = useMemo(() => {
         if (!activeProyekId) return [];
         return siteProgressList.filter((item) => {
@@ -358,6 +423,164 @@ export default function ProgressSection({
             return true;
         });
     }, [siteProgressList, activeProyekId, filterTanggal, selectedWeekKey]);
+
+    const handleDownloadDailyPdf = () => {
+        if (!activeProyekId) return;
+
+        const doc = new jsPDF({
+            orientation: 'landscape',
+            unit: 'mm',
+            format: 'a4',
+        });
+
+        const printedAt = new Date().toLocaleString('id-ID');
+        const filterInfo = filterTanggal
+            ? `Tanggal: ${formatTanggalIndo(filterTanggal)}`
+            : selectedWeekKey
+                ? `Minggu: ${getWeekRangeLabel(selectedWeekKey)}`
+                : 'Semua Tanggal';
+
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.text('LAPORAN PROGRESS HARIAN PROYEK', 14, 15);
+
+        doc.setFontSize(9.5);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Site / Proyek : ${siteLabel}`, 14, 21);
+        doc.text(`Filter Data   : ${filterInfo} (${visibleProgressList.length} laporan)`, 14, 26);
+        doc.text(`Dicetak pada  : ${printedAt}`, 14, 31);
+
+        const rows = visibleProgressList.map((item, idx) => {
+            const dateKey = normalizeDateKey(item.tanggal_laporan || item.created_at);
+            const namaBangunanDisplay =
+                item.nama_bangunan ||
+                bangunanList.find((b) => String(b.id) === String(item.bangunan_id))
+                    ?.nama_bangunan ||
+                '-';
+            const pelaksanaDisplay = item.pelaksana || item.dibuat_oleh || '-';
+            const catatanDisplay = item.catatan ?? item.kendala ?? '-';
+            const bobotDisplay = `${Number(item.bobot_realisasi || 0).toFixed(2)}%`;
+
+            return [
+                idx + 1,
+                formatTanggalIndo(dateKey),
+                pelaksanaDisplay,
+                namaBangunanDisplay,
+                item.uraian_pekerjaan || '-',
+                bobotDisplay,
+                item.cuaca || '-',
+                catatanDisplay || '-',
+            ];
+        });
+
+        autoTable(doc, {
+            startY: 36,
+            head: [[
+                'No',
+                'Tanggal Laporan',
+                'Pelaksana',
+                'Bangunan',
+                'Pekerjaan Dilaksanakan',
+                'Progres',
+                'Cuaca',
+                'Catatan',
+            ]],
+            body:
+                rows.length > 0
+                    ? rows
+                    : [['-', 'Tidak ada data progress harian untuk filter ini.', '', '', '', '', '', '']],
+            styles: {
+                fontSize: 8.5,
+                cellPadding: 2.5,
+                overflow: 'linebreak',
+            },
+            headStyles: {
+                fillColor: [16, 185, 129],
+                textColor: [255, 255, 255],
+                fontStyle: 'bold',
+            },
+            columnStyles: {
+                0: { cellWidth: 10, halign: 'center' },
+                1: { cellWidth: 34 },
+                2: { cellWidth: 32 },
+                3: { cellWidth: 36 },
+                4: { cellWidth: 68 },
+                5: { cellWidth: 22, halign: 'right' },
+                6: { cellWidth: 24 },
+                7: { cellWidth: 57 },
+            },
+        });
+
+        const datePart = filterTanggal || selectedWeekKey || new Date().toISOString().split('T')[0];
+        doc.save(`Progress_Harian_${sanitizeSlug(siteLabel)}_${datePart}.pdf`);
+    };
+
+    const handleDownloadWeeklyPdf = () => {
+        if (!activeProyekId) return;
+
+        const doc = new jsPDF({
+            orientation: 'landscape',
+            unit: 'mm',
+            format: 'a4',
+        });
+
+        const printedAt = new Date().toLocaleString('id-ID');
+
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.text('RANGKUMAN PROGRESS MINGGUAN PROYEK', 14, 15);
+
+        doc.setFontSize(9.5);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Site / Proyek : ${siteLabel}`, 14, 21);
+        doc.text(`Total Minggu  : ${weeklySummaryList.length} minggu tercatat`, 14, 26);
+        doc.text(`Dicetak pada  : ${printedAt}`, 14, 31);
+
+        const rows = weeklySummaryList.map((week, idx) => [
+            idx + 1,
+            week.rangeLabel,
+            `${week.count} laporan`,
+            `${week.avgBobot.toFixed(2)}%`,
+            week.dates.length > 0
+                ? week.dates.map((dKey) => formatTanggalIndo(dKey)).join(', ')
+                : '-',
+        ]);
+
+        autoTable(doc, {
+            startY: 36,
+            head: [[
+                'No',
+                'Periode Minggu (Senin – Minggu)',
+                'Jumlah Laporan',
+                'Rata-Rata Progres',
+                'Tanggal Laporan Tercatat',
+            ]],
+            body:
+                rows.length > 0
+                    ? rows
+                    : [['-', 'Belum ada rangkuman mingguan pada site ini.', '', '', '']],
+            styles: {
+                fontSize: 8.5,
+                cellPadding: 2.5,
+                overflow: 'linebreak',
+            },
+            headStyles: {
+                fillColor: [15, 23, 42],
+                textColor: [255, 255, 255],
+                fontStyle: 'bold',
+            },
+            columnStyles: {
+                0: { cellWidth: 10, halign: 'center' },
+                1: { cellWidth: 56 },
+                2: { cellWidth: 32, halign: 'center' },
+                3: { cellWidth: 34, halign: 'right' },
+                4: { cellWidth: 137 },
+            },
+        });
+
+        const todayStr = new Date().toISOString().split('T')[0];
+        doc.save(`Progress_Mingguan_${sanitizeSlug(siteLabel)}_${todayStr}.pdf`);
+    };
 
     const handleDokumentasiChange = (e) => {
         const file = e.target.files?.[0];
@@ -440,9 +663,9 @@ export default function ProgressSection({
 
         try {
             if (editId) {
-                await apiClient.put(`/api/fitur/progress/${editId}`, payload);
+                await apiClient.put(`/api/progress/${editId}`, payload);
             } else {
-                await apiClient.post('/api/fitur/progress', payload);
+                await apiClient.post('/api/progress', payload);
             }
             setShowForm(false);
             resetForm();
@@ -485,7 +708,7 @@ export default function ProgressSection({
     const handleDelete = async (id) => {
         if (!confirm('Hapus laporan progress harian ini?')) return;
         try {
-            await apiClient.delete(`/api/fitur/progress/${id}`);
+            await apiClient.delete(`/api/progress/${id}`);
             fetchData();
         } catch (err) {
             alert(err.response?.data?.message || 'Gagal menghapus laporan');
@@ -502,7 +725,7 @@ export default function ProgressSection({
                         <h2 className="text-xl font-bold text-white">Laporan Progress Harian</h2>
                         {isSiteSelected && (
                             <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                                Site: {getSiteLabel(selectedProyek) || `#${activeProyekId}`}
+                                Site: {siteLabel}
                             </span>
                         )}
                     </div>
@@ -536,38 +759,60 @@ export default function ProgressSection({
                     </div>
 
                     {isSiteSelected && (
-                        hasWriteAccess ? (
+                        <>
                             <button
                                 type="button"
-                                onClick={() => {
-                                    if (showForm) {
-                                        setShowForm(false);
-                                        resetForm();
-                                    } else {
-                                        setEditId(null);
-                                        setDocFileName('');
-                                        setForm((prev) => ({
-                                            ...INITIAL_FORM,
-                                            proyek_id: activeProyekId,
-                                            tanggal_laporan:
-                                                filterTanggal || new Date().toISOString().split('T')[0],
-                                            pelaksana: user?.nama || '',
-                                        }));
-                                        setShowForm(true);
-                                        fetchBangunan(activeProyekId);
-                                    }
-                                }}
-                                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium px-4 py-2.5 rounded-xl transition cursor-pointer"
+                                onClick={handleDownloadDailyPdf}
+                                className="inline-flex items-center gap-2 bg-[#131c2e] hover:bg-slate-800 border border-slate-700/80 text-slate-100 text-sm font-medium px-3.5 py-2.5 rounded-xl transition cursor-pointer"
+                                title="Unduh PDF Progress Harian"
                             >
-                                <Plus size={18} />
-                                <span>{showForm ? 'Tutup Form' : 'Input Progress Harian'}</span>
+                                <Download size={16} className="text-emerald-400" />
+                                <span>PDF Harian</span>
                             </button>
-                        ) : (
-                            <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-[#131c2e] border border-slate-700/80 text-slate-300 px-3.5 py-2 rounded-xl">
-                                <Lock size={14} className="text-slate-400" />
-                                Mode Baca (Hanya QS yang dapat mengelola laporan progress)
-                            </span>
-                        )
+
+                            <button
+                                type="button"
+                                onClick={handleDownloadWeeklyPdf}
+                                className="inline-flex items-center gap-2 bg-[#131c2e] hover:bg-slate-800 border border-slate-700/80 text-slate-100 text-sm font-medium px-3.5 py-2.5 rounded-xl transition cursor-pointer"
+                                title="Unduh PDF Progress Mingguan"
+                            >
+                                <Download size={16} className="text-blue-400" />
+                                <span>PDF Mingguan</span>
+                            </button>
+
+                            {hasWriteAccess ? (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (showForm) {
+                                            setShowForm(false);
+                                            resetForm();
+                                        } else {
+                                            setEditId(null);
+                                            setDocFileName('');
+                                            setForm((prev) => ({
+                                                ...INITIAL_FORM,
+                                                proyek_id: activeProyekId,
+                                                tanggal_laporan:
+                                                    filterTanggal || new Date().toISOString().split('T')[0],
+                                                pelaksana: user?.nama || '',
+                                            }));
+                                            setShowForm(true);
+                                            fetchBangunan(activeProyekId);
+                                        }
+                                    }}
+                                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium px-4 py-2.5 rounded-xl transition cursor-pointer"
+                                >
+                                    <Plus size={18} />
+                                    <span>{showForm ? 'Tutup Form' : 'Input Progress Harian'}</span>
+                                </button>
+                            ) : (
+                                <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-[#131c2e] border border-slate-700/80 text-slate-300 px-3.5 py-2 rounded-xl">
+                                    <Lock size={14} className="text-slate-400" />
+                                    Mode Baca (Hanya QS yang dapat mengelola laporan progress)
+                                </span>
+                            )}
+                        </>
                     )}
                 </div>
             </div>
@@ -598,16 +843,28 @@ export default function ProgressSection({
                                     Rangkuman Progress Mingguan
                                 </h3>
                             </div>
-                            {selectedWeekKey && (
-                                <button
-                                    type="button"
-                                    onClick={() => setSelectedWeekKey('')}
-                                    className="inline-flex items-center gap-1 text-xs text-emerald-300 hover:text-white underline cursor-pointer"
-                                >
-                                    <RotateCcw size={12} />
-                                    Reset filter minggu
-                                </button>
-                            )}
+                            <div className="flex items-center gap-3">
+                                {weeklySummaryList.length > 0 && (
+                                    <button
+                                        type="button"
+                                        onClick={handleDownloadWeeklyPdf}
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-800 text-xs text-slate-200 transition cursor-pointer"
+                                    >
+                                        <Download size={12} className="text-blue-400" />
+                                        <span>Unduh PDF Mingguan</span>
+                                    </button>
+                                )}
+                                {selectedWeekKey && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setSelectedWeekKey('')}
+                                        className="inline-flex items-center gap-1 text-xs text-emerald-300 hover:text-white underline cursor-pointer"
+                                    >
+                                        <RotateCcw size={12} />
+                                        Reset filter minggu
+                                    </button>
+                                )}
+                            </div>
                         </div>
 
                         {weeklySummaryList.length === 0 ? (
@@ -637,8 +894,8 @@ export default function ProgressSection({
                                                 }
                                             }}
                                             className={`p-3.5 rounded-xl border transition cursor-pointer ${isSelectedWeek
-                                                    ? 'bg-emerald-500/15 border-emerald-500/50'
-                                                    : 'bg-[#131c2e] border-slate-800 hover:border-slate-700'
+                                                ? 'bg-emerald-500/15 border-emerald-500/50'
+                                                : 'bg-[#131c2e] border-slate-800 hover:border-slate-700'
                                                 }`}
                                         >
                                             <div className="flex items-center justify-between gap-2">
@@ -666,8 +923,8 @@ export default function ProgressSection({
                                                                 );
                                                             }}
                                                             className={`px-2 py-0.5 rounded text-[10px] font-medium transition cursor-pointer ${filterTanggal === dKey
-                                                                    ? 'bg-emerald-500 text-slate-950 font-semibold'
-                                                                    : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'
+                                                                ? 'bg-emerald-500 text-slate-950 font-semibold'
+                                                                : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'
                                                                 }`}
                                                         >
                                                             {formatTanggalIndo(dKey)}
@@ -723,9 +980,19 @@ export default function ProgressSection({
                                 </button>
                             )}
                         </div>
-                        <span className="text-xs text-slate-400">
-                            Menampilkan <strong className="text-white">{visibleProgressList.length}</strong> laporan
-                        </span>
+                        <div className="flex items-center gap-3">
+                            <button
+                                type="button"
+                                onClick={handleDownloadDailyPdf}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-xs font-medium text-emerald-300 transition cursor-pointer"
+                            >
+                                <Download size={12} />
+                                <span>Unduh PDF Harian</span>
+                            </button>
+                            <span className="text-xs text-slate-400">
+                                Menampilkan <strong className="text-white">{visibleProgressList.length}</strong> laporan
+                            </span>
+                        </div>
                     </div>
 
                     {/* Form Input / Edit Progress */}
@@ -1091,15 +1358,20 @@ export default function ProgressSection({
                                                 </td>
                                                 <td className="py-3.5 px-4 whitespace-nowrap">
                                                     {item.dokumentasi ? (
-                                                        <a
-                                                            href={item.dokumentasi}
-                                                            target="_blank"
-                                                            rel="noreferrer"
-                                                            className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-400 hover:text-emerald-300"
+                                                        <button
+                                                            type="button"
+                                                            onClick={() =>
+                                                                setPreviewDoc({
+                                                                    id: item.id,
+                                                                    title: `dokumentasi-${namaBangunanDisplay}-${dateKey || item.id}`,
+                                                                    src: item.dokumentasi,
+                                                                })
+                                                            }
+                                                            className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-400 hover:text-emerald-300 cursor-pointer"
                                                         >
                                                             <FileText size={14} />
                                                             <span>Lihat Dokumen</span>
-                                                        </a>
+                                                        </button>
                                                     ) : (
                                                         <span className="text-xs text-slate-500">-</span>
                                                     )}
@@ -1132,6 +1404,77 @@ export default function ProgressSection({
                         </table>
                     </div>
                 </>
+            )}
+
+            {/* Modal Pratinjau Dokumen Terlampir */}
+            {previewDoc && (
+                <div
+                    onClick={() => setPreviewDoc(null)}
+                    className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4"
+                >
+                    <div
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-full max-w-3xl bg-[#0e1626] border border-slate-800 rounded-2xl overflow-hidden shadow-2xl"
+                    >
+                        <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-800">
+                            <div className="flex items-center gap-2 min-w-0">
+                                <FileText className="w-4 h-4 text-emerald-400 shrink-0" />
+                                <h3 className="text-sm font-bold text-white truncate">
+                                    Pratinjau Dokumen Terlampir
+                                </h3>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                                <button
+                                    type="button"
+                                    onClick={() => handleDownloadDoc(previewDoc)}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition cursor-pointer"
+                                >
+                                    <Download size={14} />
+                                    <span>Unduh</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setPreviewDoc(null)}
+                                    className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                                    aria-label="Tutup pratinjau"
+                                >
+                                    <X size={18} />
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="p-5 max-h-[75vh] overflow-auto flex items-center justify-center bg-[#070c16]">
+                            {isImageDataUrl(previewDoc.src) ? (
+                                <img
+                                    src={previewBlobUrl || previewDoc.src}
+                                    alt={previewDoc.title}
+                                    className="max-h-[65vh] w-auto object-contain rounded-lg"
+                                />
+                            ) : isPdfDocument(previewDoc.src) ? (
+                                <iframe
+                                    src={previewBlobUrl || previewDoc.src}
+                                    title={previewDoc.title}
+                                    className="w-full h-[65vh] rounded-lg border border-slate-800 bg-white"
+                                />
+                            ) : (
+                                <div className="text-center space-y-3 py-8">
+                                    <FileText className="w-10 h-10 text-slate-400 mx-auto" />
+                                    <p className="text-sm text-slate-300">
+                                        Pratinjau langsung tidak tersedia untuk format file ini.
+                                    </p>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleDownloadDoc(previewDoc)}
+                                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition cursor-pointer"
+                                    >
+                                        <Download size={15} />
+                                        <span>Unduh Dokumen</span>
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

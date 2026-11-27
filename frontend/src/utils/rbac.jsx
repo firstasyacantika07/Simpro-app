@@ -69,7 +69,7 @@ const matchesAnyRole = (userOrRole, allowedRoles, projectId = null) => {
 export const canEditMOS = (userOrRole, projectId = null) => {
     return matchesAnyRole(
         userOrRole,
-        ['logistik', 'admin proyek'],
+        ['logistik', 'admin proyek', 'pm', 'project manager', 'proyek manager'],
         projectId
     );
 };
@@ -77,7 +77,7 @@ export const canEditMOS = (userOrRole, projectId = null) => {
 export const canEditProgress = (userOrRole, projectId = null) => {
     return matchesAnyRole(
         userOrRole,
-        ['qs (quantity surveyor)', 'qs'],
+        ['qs (quantity surveyor)', 'qs', 'pm', 'project manager', 'proyek manager'],
         projectId
     );
 };

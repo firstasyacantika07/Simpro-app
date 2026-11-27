@@ -838,8 +838,8 @@ export default function Dashboard() {
 
         const [resProyek, resMos, resProgress] = await Promise.allSettled([
             apiClient.get('/api/proyek'),
-            apiClient.get('/api/fitur/mos', { params }),
-            apiClient.get('/api/fitur/progress', { params }),
+            apiClient.get('/api/mos', { params }),
+            apiClient.get('/api/progress', { params }),
         ]);
 
         if (resProyek.status === 'fulfilled') {
@@ -851,13 +851,13 @@ export default function Dashboard() {
         if (resMos.status === 'fulfilled') {
             setMosList(extractArray(resMos.value.data, ['data', 'mos']));
         } else {
-            console.error('Gagal memuat /api/fitur/mos:', resMos.reason);
+            console.error('Gagal memuat /api/mos:', resMos.reason);
         }
 
         if (resProgress.status === 'fulfilled') {
             setProgressList(extractArray(resProgress.value.data, ['data', 'progress']));
         } else {
-            console.error('Gagal memuat /api/fitur/progress:', resProgress.reason);
+            console.error('Gagal memuat /api/progress:', resProgress.reason);
         }
 
         setLoadingData(false);

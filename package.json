@@ -1,6 +1,8 @@
 {
   "dependencies": {
     "exceljs": "^4.4.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.9",
     "pdfkit": "^0.21.0"
   }
 }

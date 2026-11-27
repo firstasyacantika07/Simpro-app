@@ -129,8 +129,8 @@ export default function MosSection({
         setProyekError('');
 
         const mosUrl = activeProyekId
-            ? `/api/fitur/mos?proyek_id=${encodeURIComponent(activeProyekId)}`
-            : '/api/fitur/mos';
+            ? `/api/mos?proyek_id=${encodeURIComponent(activeProyekId)}`
+            : '/api/mos';
 
         const [mosResult, proyekResult] = await Promise.allSettled([
             apiClient.get(mosUrl),
@@ -425,9 +425,9 @@ export default function MosSection({
 
         try {
             if (editId) {
-                await apiClient.put(`/api/fitur/mos/${editId}`, payload);
+                await apiClient.put(`/api/mos/${editId}`, payload);
             } else {
-                await apiClient.post('/api/fitur/mos', payload);
+                await apiClient.post('/api/mos', payload);
             }
             setShowForm(false);
             resetForm();
@@ -459,7 +459,7 @@ export default function MosSection({
     const handleDelete = async (id) => {
         if (!confirm('Hapus data material ini?')) return;
         try {
-            await apiClient.delete(`/api/fitur/mos/${id}`);
+            await apiClient.delete(`/api/mos/${id}`);
             fetchData();
         } catch (err) {
             alert(err.response?.data?.message || 'Gagal menghapus data MOS');
@@ -574,8 +574,8 @@ export default function MosSection({
             {exportNotice && (
                 <div
                     className={`flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-sm border ${exportNotice.type === 'success'
-                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                            : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                        : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
                         }`}
                 >
                     <div className="flex items-center gap-2">
@@ -792,8 +792,8 @@ export default function MosSection({
                                                 }
                                             }}
                                             className={`p-3.5 rounded-xl border transition cursor-pointer ${active
-                                                    ? 'bg-blue-500/15 border-blue-500/50'
-                                                    : 'bg-[#131c2e] border-slate-800 hover:border-slate-700'
+                                                ? 'bg-blue-500/15 border-blue-500/50'
+                                                : 'bg-[#131c2e] border-slate-800 hover:border-slate-700'
                                                 }`}
                                         >
                                             <div className="text-xs font-semibold text-white truncate">
@@ -868,8 +868,8 @@ export default function MosSection({
                                                 }
                                             }}
                                             className={`p-3.5 rounded-xl border transition cursor-pointer ${active
-                                                    ? 'bg-emerald-500/15 border-emerald-500/50'
-                                                    : 'bg-[#131c2e] border-slate-800 hover:border-slate-700'
+                                                ? 'bg-emerald-500/15 border-emerald-500/50'
+                                                : 'bg-[#131c2e] border-slate-800 hover:border-slate-700'
                                                 }`}
                                         >
                                             <div className="flex items-center justify-between gap-2">

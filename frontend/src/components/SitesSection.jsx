@@ -27,6 +27,30 @@ const INITIAL_FORM = {
     gambar: '',
 };
 
+const parseDecimalInput = (value) => {
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : 0;
+    }
+    const normalized = String(value ?? '').replace(',', '.').trim();
+    if (!normalized) return 0;
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const clampDecimalProgress = (value) => {
+    const parsed = parseDecimalInput(value);
+    const clamped = Math.min(Math.max(parsed, 0), 100);
+    return Number(clamped.toFixed(2));
+};
+
+const formatDecimalDisplay = (value) => {
+    const num = clampDecimalProgress(value);
+    return num.toLocaleString('id-ID', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+    });
+};
+
 const isPmRoleValue = (val) => {
     const normalized = String(val || '').trim().toLowerCase();
     return (
@@ -298,7 +322,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
             nama_proyek: site.nama_proyek || '',
             lokasi: site.lokasi || '',
             status: site.status || 'Berjalan',
-            persentase_progres: Number(currentProgress) || 0,
+            persentase_progres: clampDecimalProgress(currentProgress),
             gambar: site.gambar || '',
         });
         setShowForm(true);
@@ -333,10 +357,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
         }
 
         setSubmitting(true);
-        const clampedProgress = Math.min(
-            Math.max(Number(form.persentase_progres) || 0, 0),
-            100
-        );
+        const clampedProgress = clampDecimalProgress(form.persentase_progres);
 
         const payload = {
             nama_proyek: form.nama_proyek.trim(),
@@ -447,7 +468,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
         const latestProgressByProyek = new Map();
         progressList.forEach((p) => {
             const key = String(p.proyek_id ?? '');
-            const val = Number(p.bobot_realisasi ?? 0);
+            const val = parseDecimalInput(p.bobot_realisasi ?? 0);
             const time = p.tanggal_laporan ? new Date(p.tanggal_laporan).getTime() : 0;
             const prev = latestProgressByProyek.get(key);
             if (!prev || time >= prev.time) {
@@ -465,12 +486,12 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
                         (rawSiteProgress !== undefined &&
                             rawSiteProgress !== null &&
                             rawSiteProgress !== '')
-                        ? Number(rawSiteProgress)
+                        ? parseDecimalInput(rawSiteProgress)
                         : fallbackProg;
 
                 return {
                     ...site,
-                    displayProgress: Math.min(Math.max(Math.round(computedProgress || 0), 0), 100),
+                    displayProgress: clampDecimalProgress(computedProgress),
                     displayImage: site.gambar || DEFAULT_SITE_IMAGE,
                     members: anggotaBySite[String(site.id)] || [],
                     buildings: bangunanBySite[String(site.id)] || [],
@@ -581,7 +602,8 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
                             type="number"
                             min="0"
                             max="100"
-                            step="1"
+                            step="any"
+                            placeholder="Contoh: 12.5 atau 37.75"
                             className="w-full bg-[#131c2e] border border-slate-700/80 text-slate-100 placeholder-slate-500 rounded-xl px-3.5 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                             value={form.persentase_progres}
                             onChange={(e) =>
@@ -779,7 +801,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
                                                     Progres Pekerjaan
                                                 </span>
                                                 <span className="font-semibold text-white tabular-nums">
-                                                    {site.displayProgress}%
+                                                    {formatDecimalDisplay(site.displayProgress)}%
                                                 </span>
                                             </div>
                                             <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden">
@@ -812,7 +834,7 @@ export default function SitesSection({ user, onDataChanged, onOpenProgress }) {
                                                         >
                                                             <span>{b.nama_bangunan}</span>
                                                             <span className="text-blue-400 tabular-nums">
-                                                                {Number(b.persentase_progres || 0).toFixed(0)}%
+                                                                {formatDecimalDisplay(b.persentase_progres || 0)}%
                                                             </span>
                                                         </span>
                                                     ))}
