@@ -11,6 +11,7 @@ const mosRoutes = require('./routes/mosRoutes');
 const progressRoutes = require('./routes/progressRoutes');
 const mosExportRoutes = require('./routes/mosExportRoutes');
 const superAdminRoutes = require('./routes/superAdminRoutes');
+const superAdminRoleRoutes = require('./routes/superAdminRoleRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -45,6 +46,7 @@ app.use('/api/auth', authRoutes);
 
 // Endpoint SuperAdmin
 app.use('/api/superadmin', superAdminRoutes);
+app.use('/api/superadmin', superAdminRoleRoutes);
 
 // Endpoint terproteksi
 app.use('/api/proyek', authenticateToken, proyekRoutes);

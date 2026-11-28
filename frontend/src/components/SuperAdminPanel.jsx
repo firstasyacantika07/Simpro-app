@@ -1,4 +1,3 @@
-
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -17,6 +16,7 @@ import apiClient, { logoutRequest } from '../api/axiosClient';
 
 const FALLBACK_ROLES = [
     'Admin Proyek',
+    'Project Manager',
     'Logistik',
     'QS (Quantity Surveyor)',
     'Pengawas',
@@ -275,11 +275,10 @@ export default function SuperAdminPanel({ currentUser }) {
 
                 {feedback.text && (
                     <div
-                        className={`px-4 py-3 rounded-xl text-xs border ${
-                            feedback.type === 'error'
+                        className={`px-4 py-3 rounded-xl text-xs border ${feedback.type === 'error'
                                 ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
                                 : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                        }`}
+                            }`}
                     >
                         {feedback.text}
                     </div>
@@ -325,6 +324,9 @@ export default function SuperAdminPanel({ currentUser }) {
                                     const selectedRole =
                                         roleOverrides[inv.id] ?? inv.approved_role_code ?? inv.requested_role_code;
                                     const isPending = inv.status === 'pending_approval';
+                                    const inviteRoleChoices = Array.from(
+                                        new Set([...(selectedRole ? [selectedRole] : []), ...roleOptions])
+                                    );
                                     return (
                                         <tr key={inv.id} className="hover:bg-slate-900/40">
                                             <td className="px-3 py-3 font-medium text-white">{inv.nama_proyek}</td>
@@ -342,7 +344,7 @@ export default function SuperAdminPanel({ currentUser }) {
                                                             }
                                                             className="bg-[#131c2e] border border-slate-700 rounded-lg px-2 py-1 text-xs text-white"
                                                         >
-                                                            {roleOptions.map((r) => (
+                                                            {inviteRoleChoices.map((r) => (
                                                                 <option key={r} value={r}>
                                                                     {r}
                                                                 </option>
@@ -430,59 +432,63 @@ export default function SuperAdminPanel({ currentUser }) {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-800/80">
-                                {users.map((u) => (
-                                    <tr key={u.id}>
-                                        <td className="px-3 py-3 font-medium text-white">{u.nama}</td>
-                                        <td className="px-3 py-3 break-all">{u.email}</td>
-                                        <td className="px-3 py-3">
-                                            <select
-                                                value={u.role || 'user'}
-                                                onChange={(e) =>
-                                                    handleUserRoleChange(u.id, e.target.value, undefined, undefined)
-                                                }
-                                                className="bg-[#131c2e] border border-slate-700 rounded-lg px-2 py-1 text-xs text-white"
-                                            >
-                                                <option value="user">user</option>
-                                                <option value="SuperAdmin">SuperAdmin</option>
-                                            </select>
-                                        </td>
-                                        <td className="px-3 py-3">
-                                            <select
-                                                value={u.posisi || roleOptions[0] || 'Admin Proyek'}
-                                                onChange={(e) =>
-                                                    handleUserRoleChange(u.id, undefined, e.target.value, undefined)
-                                                }
-                                                className="bg-[#131c2e] border border-slate-700 rounded-lg px-2 py-1 text-xs text-white"
-                                            >
-                                                {roleOptions.map((r) => (
-                                                    <option key={r} value={r}>
-                                                        {r}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                        </td>
-                                        <td className="px-3 py-3">
-                                            {(u.memberships || []).length > 0
-                                                ? u.memberships.map((m) => `${m.nama_proyek} (${m.role_code})`).join(', ')
-                                                : '-'}
-                                        </td>
-                                        <td className="px-3 py-3">
-                                            <button
-                                                type="button"
-                                                onClick={() =>
-                                                    handleUserRoleChange(u.id, undefined, undefined, !u.is_active)
-                                                }
-                                                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
-                                                    u.is_active
-                                                        ? 'bg-emerald-500/15 text-emerald-300'
-                                                        : 'bg-rose-500/15 text-rose-300'
-                                                }`}
-                                            >
-                                                {u.is_active ? 'Aktif' : 'Nonaktif'}
-                                            </button>
-                                        </td>
-                                    </tr>
-                                ))}
+                                {users.map((u) => {
+                                    const userRoleChoices = Array.from(
+                                        new Set([...(u.posisi ? [u.posisi] : []), ...roleOptions])
+                                    );
+                                    return (
+                                        <tr key={u.id}>
+                                            <td className="px-3 py-3 font-medium text-white">{u.nama}</td>
+                                            <td className="px-3 py-3 break-all">{u.email}</td>
+                                            <td className="px-3 py-3">
+                                                <select
+                                                    value={u.role || 'user'}
+                                                    onChange={(e) =>
+                                                        handleUserRoleChange(u.id, e.target.value, undefined, undefined)
+                                                    }
+                                                    className="bg-[#131c2e] border border-slate-700 rounded-lg px-2 py-1 text-xs text-white"
+                                                >
+                                                    <option value="user">user</option>
+                                                    <option value="SuperAdmin">SuperAdmin</option>
+                                                </select>
+                                            </td>
+                                            <td className="px-3 py-3">
+                                                <select
+                                                    value={u.posisi || roleOptions[0] || 'Project Manager'}
+                                                    onChange={(e) =>
+                                                        handleUserRoleChange(u.id, undefined, e.target.value, undefined)
+                                                    }
+                                                    className="bg-[#131c2e] border border-slate-700 rounded-lg px-2 py-1 text-xs text-white"
+                                                >
+                                                    {userRoleChoices.map((r) => (
+                                                        <option key={r} value={r}>
+                                                            {r}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </td>
+                                            <td className="px-3 py-3">
+                                                {(u.memberships || []).length > 0
+                                                    ? u.memberships.map((m) => `${m.nama_proyek} (${m.role_code})`).join(', ')
+                                                    : '-'}
+                                            </td>
+                                            <td className="px-3 py-3">
+                                                <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                        handleUserRoleChange(u.id, undefined, undefined, !u.is_active)
+                                                    }
+                                                    className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${u.is_active
+                                                            ? 'bg-emerald-500/15 text-emerald-300'
+                                                            : 'bg-rose-500/15 text-rose-300'
+                                                        }`}
+                                                >
+                                                    {u.is_active ? 'Aktif' : 'Nonaktif'}
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
@@ -595,11 +601,10 @@ export default function SuperAdminPanel({ currentUser }) {
                                                         </label>
                                                     ) : (
                                                         <span
-                                                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold ${
-                                                                isActive
+                                                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold ${isActive
                                                                     ? 'bg-emerald-500/15 text-emerald-300'
                                                                     : 'bg-rose-500/15 text-rose-300'
-                                                            }`}
+                                                                }`}
                                                         >
                                                             {isActive ? 'Aktif' : 'Nonaktif'}
                                                         </span>

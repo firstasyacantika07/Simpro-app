@@ -21,6 +21,7 @@ import {
     CheckCircle2,
     UserCheck,
     X,
+    CheckCheck,
 } from 'lucide-react';
 import SitesSection from '../components/SitesSection';
 import MosSection from '../components/MosSection';
@@ -81,6 +82,18 @@ const getMosTerpakai = (item) => parseDecimal(item?.jumlah_terpakai ?? 0);
 const getMosDateKey = (item) =>
     String(item?.tanggal_masuk || item?.tanggal_update || item?.created_at || '').split('T')[0];
 
+const getTimestampScore = (primaryTimestamp, fallbackDate, fallbackId) => {
+    const candidates = [primaryTimestamp, fallbackDate];
+    for (const c of candidates) {
+        if (!c) continue;
+        const parsed = new Date(c).getTime();
+        if (!Number.isNaN(parsed) && parsed > 0) {
+            return parsed + (Number(fallbackId) || 0);
+        }
+    }
+    return Number(fallbackId) || 0;
+};
+
 const mapWeatherCode = (code) => {
     if (code === 0) return { label: 'Cerah', type: 'clear' };
     if (code === 1 || code === 2) return { label: 'Cerah Berawan', type: 'partly-cloudy' };
@@ -118,8 +131,19 @@ const formatShortDate = (dateInput) => {
 
 const formatDateTime = (dateInput) => {
     if (!dateInput) return '-';
-    const d = new Date(dateInput);
-    if (Number.isNaN(d.getTime())) return String(dateInput);
+    const raw = String(dateInput).trim();
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return raw;
+
+    // Jika format hanya tanggal YYYY-MM-DD tanpa jam, tampilkan tanggal saja
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+        return d.toLocaleDateString('id-ID', {
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric',
+        });
+    }
+
     return d.toLocaleString('id-ID', {
         day: '2-digit',
         month: 'short',
@@ -472,37 +496,118 @@ function LaporanView({ proyekList, mosList, progressList, onNavigate }) {
     );
 }
 
-function NotifikasiView({ activities, readIds, onMarkRead, onNavigate }) {
+function NotifikasiView({
+    activities,
+    readIds,
+    onMarkRead,
+    onMarkAllRead,
+    onRefresh,
+    loadingData,
+    onNavigate,
+}) {
+    const [filterType, setFilterType] = useState('all'); // 'all' | 'unread' | 'progress' | 'mos'
+
+    const unreadCount = useMemo(
+        () => activities.filter((act) => !readIds.includes(act.id)).length,
+        [activities, readIds]
+    );
+
+    const displayedActivities = useMemo(() => {
+        if (filterType === 'unread') {
+            return activities.filter((act) => !readIds.includes(act.id));
+        }
+        if (filterType === 'progress' || filterType === 'mos') {
+            return activities.filter((act) => act.type === filterType);
+        }
+        return activities;
+    }, [activities, readIds, filterType]);
+
     return (
         <div className="space-y-5 text-left">
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                     <h2 className="text-xl font-bold text-white">Pusat Notifikasi</h2>
                     <p className="text-sm text-slate-400">
-                        Aktivitas terbaru dari pembaruan progress harian dan inventaris MOS.
+                        Aktivitas terbaru dari penambahan & pembaruan progress harian serta inventaris MOS.
                     </p>
                 </div>
-                <button
-                    type="button"
-                    onClick={() => onNavigate('overview')}
-                    className="px-3.5 py-2 rounded-xl bg-[#11192b] hover:bg-slate-800 border border-slate-700/80 text-xs font-medium text-slate-200 transition cursor-pointer"
-                >
-                    Kembali ke Dashboard
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={onRefresh}
+                        disabled={loadingData}
+                        className="px-3 py-2 rounded-xl bg-[#11192b] hover:bg-slate-800 border border-slate-700/80 text-xs font-medium text-slate-200 flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                    >
+                        <RefreshCw className={`w-3.5 h-3.5 ${loadingData ? 'animate-spin' : ''}`} />
+                        <span>Muat Ulang</span>
+                    </button>
+
+                    {unreadCount > 0 && (
+                        <button
+                            type="button"
+                            onClick={onMarkAllRead}
+                            className="px-3 py-2 rounded-xl bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 text-xs font-medium text-blue-300 flex items-center gap-1.5 transition cursor-pointer"
+                        >
+                            <CheckCheck className="w-3.5 h-3.5" />
+                            <span>Tandai Semua Dibaca ({unreadCount})</span>
+                        </button>
+                    )}
+
+                    <button
+                        type="button"
+                        onClick={() => onNavigate('overview')}
+                        className="px-3.5 py-2 rounded-xl bg-[#11192b] hover:bg-slate-800 border border-slate-700/80 text-xs font-medium text-slate-200 transition cursor-pointer"
+                    >
+                        Kembali ke Dashboard
+                    </button>
+                </div>
+            </div>
+
+            {/* Filter Tab */}
+            <div className="flex flex-wrap items-center gap-2">
+                {[
+                    { id: 'all', label: `Semua (${activities.length})` },
+                    { id: 'unread', label: `Belum Dibaca (${unreadCount})` },
+                    {
+                        id: 'progress',
+                        label: `Progress (${activities.filter((a) => a.type === 'progress').length})`,
+                    },
+                    {
+                        id: 'mos',
+                        label: `MOS (${activities.filter((a) => a.type === 'mos').length})`,
+                    },
+                ].map((tab) => (
+                    <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setFilterType(tab.id)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition cursor-pointer ${filterType === tab.id
+                                ? 'bg-blue-600 border-blue-500 text-white'
+                                : 'bg-[#0e1626] border-slate-800 text-slate-400 hover:text-slate-200'
+                            }`}
+                    >
+                        {tab.label}
+                    </button>
+                ))}
             </div>
 
             <div className="bg-[#0e1626] border border-slate-800/80 rounded-2xl divide-y divide-slate-800/60">
-                {activities.length === 0 ? (
+                {displayedActivities.length === 0 ? (
                     <div className="p-8 text-center text-sm text-slate-500">
-                        Belum ada notifikasi aktivitas terbaru.
+                        {filterType === 'unread'
+                            ? 'Semua notifikasi sudah dibaca.'
+                            : 'Belum ada notifikasi aktivitas pada kategori ini.'}
                     </div>
                 ) : (
-                    activities.map((act) => {
+                    displayedActivities.map((act) => {
                         const isUnread = !readIds.includes(act.id);
                         return (
                             <div
                                 key={act.id}
-                                className="p-4 flex items-center justify-between gap-4 hover:bg-slate-800/30 transition"
+                                className={`p-4 flex items-center justify-between gap-4 transition ${isUnread
+                                        ? 'bg-blue-500/[0.04] hover:bg-blue-500/[0.08]'
+                                        : 'hover:bg-slate-800/30'
+                                    }`}
                             >
                                 <div className="flex items-center gap-3.5 min-w-0">
                                     <div
@@ -515,7 +620,7 @@ function NotifikasiView({ activities, readIds, onMarkRead, onNavigate }) {
                                         )}
                                     </div>
                                     <div className="min-w-0">
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex flex-wrap items-center gap-2">
                                             <span className="text-sm font-medium text-white truncate">
                                                 {act.title}
                                             </span>
@@ -525,7 +630,10 @@ function NotifikasiView({ activities, readIds, onMarkRead, onNavigate }) {
                                                 </span>
                                             )}
                                         </div>
-                                        <div className="text-xs text-slate-400">{act.time}</div>
+                                        <div className="text-xs text-slate-400 mt-0.5">
+                                            {act.projectName ? `${act.projectName} · ` : ''}
+                                            {act.time}
+                                        </div>
                                     </div>
                                 </div>
 
@@ -916,6 +1024,14 @@ export default function Dashboard() {
         };
     }, [clearSessionAndRedirect, loadDashboardData, navigate, selectedProyekId]);
 
+    // Sinkronkan ulang data otomatis setiap kali kembali ke overview atau membuka notifikasi
+    useEffect(() => {
+        if (!user) return;
+        if (activeMenu === 'overview' || activeMenu === 'notifikasi' || activeMenu === 'laporan') {
+            loadDashboardData(selectedProyekId);
+        }
+    }, [activeMenu, user, selectedProyekId, loadDashboardData]);
+
     const memberships = useMemo(
         () => (Array.isArray(user?.memberships) ? user.memberships : []),
         [user]
@@ -940,6 +1056,10 @@ export default function Dashboard() {
             DEFAULT_WEATHER_COORDS.locationName
         );
     }, [loadDashboardData, selectedProyekId, fetchRealWeather]);
+
+    const handleSectionDataChanged = useCallback(() => {
+        loadDashboardData(selectedProyekId);
+    }, [loadDashboardData, selectedProyekId]);
 
     const handleOpenCalendarPicker = useCallback(() => {
         const el = dateInputRef.current;
@@ -1170,27 +1290,38 @@ export default function Dashboard() {
         return { series, labels };
     }, [progressList, proyekList]);
 
-    const recentActivities = useMemo(() => {
-        const progActs = progressList.map((p) => ({
-            id: `prog-${p.id}-${p.tanggal_laporan || ''}-${p.bobot_realisasi ?? 0}`,
-            title: p.uraian_pekerjaan || `Update progress Proyek #${p.proyek_id}`,
-            time: formatDateTime(p.tanggal_laporan),
-            sortTime: p.tanggal_laporan ? new Date(p.tanggal_laporan).getTime() : 0,
-            badge: `${parseDecimal(p.bobot_realisasi ?? 0)}%`,
-            badgeClass: 'text-emerald-400 font-semibold',
-            iconBg: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
-            type: 'progress',
-            targetMenu: 'progress',
-        }));
+    const allActivities = useMemo(() => {
+        const proyekNameMap = new Map();
+        proyekList.forEach((p) => proyekNameMap.set(String(p.id), p.nama_proyek));
+
+        const progActs = progressList.map((p) => {
+            const timestamp = p.updated_at || p.created_at || p.tanggal_laporan;
+            const dateDisplay = formatDateTime(timestamp || p.tanggal_laporan);
+            return {
+                id: `prog-${p.id}-${p.updated_at || p.created_at || p.tanggal_laporan || ''}-${p.bobot_realisasi ?? 0}`,
+                title: p.uraian_pekerjaan || `Laporan Progress Proyek #${p.proyek_id}`,
+                projectName: proyekNameMap.get(String(p.proyek_id)) || p.nama_proyek || '',
+                time: dateDisplay,
+                sortTime: getTimestampScore(p.updated_at || p.created_at, p.tanggal_laporan, p.id),
+                badge: `${parseDecimal(p.bobot_realisasi ?? 0)}%`,
+                badgeClass: 'text-emerald-400 font-semibold',
+                iconBg: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+                type: 'progress',
+                targetMenu: 'progress',
+            };
+        });
 
         const mosActs = mosList.map((m) => {
             const masuk = getMosMasuk(m);
-            const dateVal = getMosDateKey(m);
+            const terpakai = getMosTerpakai(m);
+            const dateKey = getMosDateKey(m);
+            const timestamp = m.updated_at || m.created_at || dateKey;
             return {
-                id: `mos-${m.id}-${dateVal}-${masuk}-${m.jumlah_terpakai ?? 0}`,
-                title: `Update material ${m.nama_material || m.kode_material || 'MOS'}`,
-                time: formatDateTime(dateVal),
-                sortTime: dateVal ? new Date(dateVal).getTime() : 0,
+                id: `mos-${m.id}-${m.updated_at || m.created_at || dateKey}-${masuk}-${terpakai}`,
+                title: `Material ${m.nama_material || m.kode_material || 'MOS'}${terpakai > 0 ? ` (Terpakai ${terpakai} ${m.satuan || ''})` : ''}`,
+                projectName: proyekNameMap.get(String(m.proyek_id)) || m.nama_proyek || '',
+                time: formatDateTime(timestamp),
+                sortTime: getTimestampScore(m.updated_at || m.created_at, dateKey, m.id),
                 badge: `+${masuk} ${m.satuan || ''}`.trim(),
                 badgeClass: 'text-sky-400 font-semibold',
                 iconBg: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
@@ -1201,25 +1332,24 @@ export default function Dashboard() {
 
         return [...progActs, ...mosActs]
             .sort((a, b) => b.sortTime - a.sortTime)
-            .slice(0, 5);
-    }, [progressList, mosList]);
+            .slice(0, 20);
+    }, [progressList, mosList, proyekList]);
+
+    const recentActivities = useMemo(() => allActivities.slice(0, 5), [allActivities]);
 
     const unreadNotificationCount = useMemo(() => {
-        return recentActivities.filter((act) => !readNotificationIds.includes(act.id)).length;
-    }, [recentActivities, readNotificationIds]);
-
-    useEffect(() => {
-        if (activeMenu === 'notifikasi' && recentActivities.length > 0) {
-            markNotificationsAsRead(recentActivities.map((a) => a.id));
-        }
-    }, [activeMenu, recentActivities, markNotificationsAsRead]);
+        return allActivities.filter((act) => !readNotificationIds.includes(act.id)).length;
+    }, [allActivities, readNotificationIds]);
 
     const handleBellClick = useCallback(() => {
-        if (recentActivities.length > 0) {
-            markNotificationsAsRead(recentActivities.map((a) => a.id));
-        }
         handleNavigate('notifikasi');
-    }, [recentActivities, markNotificationsAsRead, handleNavigate]);
+    }, [handleNavigate]);
+
+    const handleMarkAllNotificationsRead = useCallback(() => {
+        if (allActivities.length > 0) {
+            markNotificationsAsRead(allActivities.map((a) => a.id));
+        }
+    }, [allActivities, markNotificationsAsRead]);
 
     const getHeaderInfo = () => {
         const roleLabel = activeMembership?.role_code || user?.posisi || user?.role || '';
@@ -1757,6 +1887,7 @@ export default function Dashboard() {
                             user={effectiveUser}
                             selectedProyekId={selectedProyekId}
                             onSelectProyekId={handleSelectProjectContext}
+                            onDataChanged={handleSectionDataChanged}
                         />
                     )}
 
@@ -1765,6 +1896,7 @@ export default function Dashboard() {
                             user={effectiveUser}
                             selectedProyekId={selectedProyekId}
                             onSelectProyekId={handleSelectProjectContext}
+                            onDataChanged={handleSectionDataChanged}
                         />
                     )}
 
@@ -1779,9 +1911,12 @@ export default function Dashboard() {
 
                     {activeMenu === 'notifikasi' && (
                         <NotifikasiView
-                            activities={recentActivities}
+                            activities={allActivities}
                             readIds={readNotificationIds}
                             onMarkRead={(id) => markNotificationsAsRead([id])}
+                            onMarkAllRead={handleMarkAllNotificationsRead}
+                            onRefresh={handleRefresh}
+                            loadingData={loadingData}
                             onNavigate={handleNavigate}
                         />
                     )}
